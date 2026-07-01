@@ -1,4 +1,4 @@
-"""OCTG Torque–Tension Interaction App — SPE-232499-MS.
+"""Torque-Tension Analytical Model.
 
 Manual-entry tool: the user supplies their own connection geometry, pipe body
 geometry, material grade, and torque-turn data. Results are only as good as
@@ -42,7 +42,7 @@ from octg_torque_tension.core.materials import P110, N80, L80, Q125, SteelGrade
 # ── Page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="OCTG Torque–Tension | SPE-232499-MS",
+    page_title="Torque-Tension Analytical Model",
     page_icon="🔩",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -55,7 +55,7 @@ _CONN_COLOR = "#1f77b4"
 
 # Example presets — used only for the optional "cargar ejemplo" button and to
 # detect whether the user is still on out-of-the-box (uncalibrated) values.
-# Sourced from SPE-232499-MS Table 1 / MODEL_NOTES estimates (BTC6.30, BSP6.05).
+# Sourced from MODEL_NOTES estimates (BTC6.30, BSP6.05).
 _EXAMPLES = {
     "Buttress / Shouldered": dict(
         cod=6.300, bcr=5.385, st_pin=5.500, l_b=9.375, l_fl=0.200, lf_area=60.0,
@@ -116,8 +116,7 @@ def sticky_number_input(label: str, key: str, fallback: float, **kwargs):
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
-st.sidebar.title("🔩 OCTG Torque–Tension")
-st.sidebar.caption("SPE-232499-MS — Ott et al. (2026) — entrada manual")
+st.sidebar.title("🔩 Torque-Tension Analytical Model")
 st.sidebar.divider()
 
 # 1) Tipo de conexión — controla el screw-jack
@@ -402,16 +401,15 @@ uncalibrated = using_example_values or estimating_delta_turns
 
 # ── Title ─────────────────────────────────────────────────────────────────────
 
-st.title("OCTG Torque–Tension Interaction")
+st.title("Torque-Tension Analytical Model")
 st.markdown(
     f"**{conn_type}** &nbsp;|&nbsp; {grade.name} &nbsp;|&nbsp; "
-    f"COD {cod:.2f} in &nbsp;|&nbsp; DF = {design_factor:.2f} &nbsp;|&nbsp; "
-    f"*SPE-232499-MS, Ott et al. (2026)*"
+    f"COD {cod:.2f} in &nbsp;|&nbsp; DF = {design_factor:.2f}"
 )
 
 # Always-on general disclaimer (calm tone)
 st.info(
-    "Modelo analítico basado en SPE-232499-MS — **no es una herramienta certificada**. "
+    "Modelo analítico — **no es una herramienta certificada**. "
     "Verificar contra datos CDS del fabricante y criterios de la operadora antes de "
     "cualquier decisión de campo.",
     icon="ℹ️",
@@ -597,7 +595,7 @@ with st.expander("📐 Resumen de Geometría e Inputs"):
 
 with st.expander("📖 Notas del Modelo y Limitaciones"):
     st.markdown("""
-    **Modelo analítico — SPE-232499-MS, Ott et al. (2026)**
+    **Modelo analítico — ecuaciones de interacción torque-tensión**
 
     | Ecuación | Descripción |
     |----------|-------------|
@@ -628,6 +626,5 @@ with st.expander("📖 Notas del Modelo y Limitaciones"):
     """)
 
 st.caption(
-    "SPE-232499-MS — Ott, Del Castillo, Broussard (Fermata Connections, 2026) | "
     "Imperial: in, lbf, psi, ft·lbf | Modelo analítico — no certificado para uso en campo"
 )
