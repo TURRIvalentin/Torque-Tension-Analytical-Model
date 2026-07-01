@@ -71,6 +71,62 @@ def polar_moment_annulus(od: float, id_: float) -> float:
     return math.pi / 32.0 * (od**4 - id_**4)
 
 
+def pipe_id_from_wall(od: float, wall: float) -> float:
+    """Casing inside diameter from OD and wall thickness (in).
+
+    ID = OD - 2 x wall
+
+    Args:
+        od: Pipe outer diameter [in].
+        wall: Wall thickness [in].
+
+    Returns:
+        Inside diameter [in].
+    """
+    if od <= 0 or wall <= 0:
+        raise ValueError(f"od and wall must be positive: od={od}, wall={wall}")
+    id_ = od - 2.0 * wall
+    if id_ <= 0:
+        raise ValueError(f"Wall too thick for OD: od={od}, wall={wall} gives ID<=0")
+    return id_
+
+
+def wall_from_nominal_weight(od: float, weight_lb_per_ft: float) -> float:
+    """Wall thickness from API 5CT nominal (plain-end) weight approximation (in).
+
+    W ~= 10.69 x t x (OD - t)  [lb/ft], steel density 0.2836 lb/in3.
+    Solved for t (smaller physical root, t < OD/2).
+
+    Standard API 5CT plain-end weight approximation — not from SPE-232499-MS.
+    Catalog "nominal weight" includes upset/coupling adjustments and may
+    differ slightly from this plain-end estimate.
+
+    Args:
+        od: Pipe outer diameter [in].
+        weight_lb_per_ft: Nominal weight [lb/ft].
+
+    Returns:
+        Wall thickness t [in].
+    """
+    if od <= 0:
+        raise ValueError(f"od must be positive, got {od}")
+    if weight_lb_per_ft <= 0:
+        raise ValueError(f"weight_lb_per_ft must be positive, got {weight_lb_per_ft}")
+    k = 10.69
+    disc = (k * od) ** 2 - 4 * k * weight_lb_per_ft
+    if disc < 0:
+        raise ValueError(
+            f"weight {weight_lb_per_ft} lb/ft is not achievable for OD={od} in "
+            f"(no real wall-thickness solution)"
+        )
+    t = (k * od - math.sqrt(disc)) / (2 * k)
+    if t <= 0 or t >= od / 2:
+        raise ValueError(
+            f"Computed wall thickness {t:.4f} in is out of physical range for OD={od}"
+        )
+    return t
+
+
 def lf_area(
     tpi: float,
     engagement_length: float,

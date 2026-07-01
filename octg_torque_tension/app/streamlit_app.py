@@ -1,11 +1,8 @@
 """OCTG Torque–Tension Interaction App — SPE-232499-MS.
 
-SAFETY NOTICE: The BCCS curve uses placeholder parameters (BCR, STpin, LB, LFArea,
-delta_MU, delta_OT) not given numerically in the paper. Results in BCCS-governed
-zones are PRELIMINARY and must NOT be used for field decisions without validation
-against manufacturer CDS and Fig. 11 torque-turn data.
-
-The pipe body curve is reliable (anchored to API 5CT / Table 1 geometry).
+Manual-entry tool: the user supplies their own connection geometry, pipe body
+geometry, material grade, and torque-turn data. Results are only as good as
+the inputs — this is an analytical model, not a certified engineering tool.
 
 Run locally:
     streamlit run octg_torque_tension/app/streamlit_app.py
@@ -15,7 +12,8 @@ Streamlit Community Cloud:
     All dependencies in requirements.txt.
 
 Architecture:
-    All physics in octg_torque_tension/core/. Zero calculations in this file.
+    All physics in octg_torque_tension/core/. Zero calculations in this file
+    beyond simple UI bookkeeping (default/example comparison, display labels).
 """
 from __future__ import annotations
 
@@ -28,15 +26,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import numpy as np
 import streamlit as st
-from dataclasses import replace as dc_replace
 
-from octg_torque_tension.core.connections import BTC6_30, BTC6_05, BSP6_05, BSL5_90, Connection
+from octg_torque_tension.core.connections import Connection
 from octg_torque_tension.core.envelope import compute_envelope, check_operating_point, OperatingPoint, EnvelopeResult
-from octg_torque_tension.core.geometry import bccs_area, polar_moment_annulus
-from octg_torque_tension.core.materials import P110, N80, L80, Q125
+from octg_torque_tension.core.geometry import (
+    bccs_area,
+    pipe_id_from_wall,
+    polar_moment_annulus,
+    wall_from_nominal_weight,
+)
+from octg_torque_tension.core.materials import P110, N80, L80, Q125, SteelGrade
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -49,221 +50,411 @@ st.set_page_config(
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-_CATALOG: dict[str, Connection] = {
-    "BTC6.30 — Standard Clearance (shouldered)": BTC6_30,
-    "BTC6.05 — Enhanced Clearance (shouldered)": BTC6_05,
-    "BSP6.05 — Bushmaster SP (wedge)":           BSP6_05,
-    "BSL5.90 — Bushmaster SL (wedge)":           BSL5_90,
+_GRADES: dict[str, SteelGrade] = {"P110": P110, "N80": N80, "L80": L80, "Q125": Q125}
+_CONN_COLOR = "#1f77b4"
+
+# Example presets — used only for the optional "cargar ejemplo" button and to
+# detect whether the user is still on out-of-the-box (uncalibrated) values.
+# Sourced from SPE-232499-MS Table 1 / MODEL_NOTES estimates (BTC6.30, BSP6.05).
+_EXAMPLES = {
+    "Buttress / Shouldered": dict(
+        cod=6.300, bcr=5.385, st_pin=5.500, l_b=9.375, l_fl=0.200, lf_area=60.0,
+        pipe_od=5.500, pipe_wall=0.361,
+        delta_mu=0.030, delta_ot=0.150,
+        tq_max=30_600.0, design_factor=1.4, grade="P110",
+    ),
+    "Wedge": dict(
+        cod=6.050, bcr=5.399, st_pin=5.500, l_b=9.375, l_fl=0.200, lf_area=60.0,
+        pipe_od=5.500, pipe_wall=0.361,
+        delta_mu=0.030, delta_ot=0.150,
+        tq_max=39_800.0, design_factor=1.4, grade="P110",
+    ),
 }
 
-_COLORS = {"BTC6.30": "#1f77b4", "BTC6.05": "#d62728",
-           "BSP6.05": "#2ca02c",  "BSL5.90": "#9467bd",  "Custom": "#7f7f7f"}
-
-_GRADES = {"P110": P110, "N80": N80, "L80": L80, "Q125": Q125}
-
-_PIPE_OD = 5.5    # in — fixed; all connections use 5.5-in 20# pipe body
-_PIPE_ID = 4.778  # in — API 5CT (5.5-in, 20 lb/ft)
+_KEYS = [
+    "geo_cod", "geo_bcr", "geo_st_pin", "geo_l_b", "geo_l_fl", "geo_lf_area",
+    "pipe_od", "pipe_wall", "dt_delta_mu", "dt_delta_ot",
+    "tq_max", "design_factor", "mat_grade",
+]
 
 
-def _conn_color(name: str) -> str:
-    for k, v in _COLORS.items():
-        if k in name:
-            return v
-    return _COLORS["Custom"]
+def _init_defaults(conn_type: str) -> None:
+    ex = _EXAMPLES[conn_type]
+    st.session_state["geo_cod"] = ex["cod"]
+    st.session_state["geo_bcr"] = ex["bcr"]
+    st.session_state["geo_st_pin"] = ex["st_pin"]
+    st.session_state["geo_l_b"] = ex["l_b"]
+    st.session_state["geo_l_fl"] = ex["l_fl"]
+    st.session_state["geo_lf_area"] = ex["lf_area"]
+    st.session_state["pipe_od"] = ex["pipe_od"]
+    st.session_state["pipe_wall"] = ex["pipe_wall"]
+    st.session_state["dt_delta_mu"] = ex["delta_mu"]
+    st.session_state["dt_delta_ot"] = ex["delta_ot"]
+    st.session_state["tq_max"] = ex["tq_max"]
+    st.session_state["design_factor"] = ex["design_factor"]
+    st.session_state["mat_grade"] = ex["grade"]
+    st.session_state["j_mode"] = "Calculado de COD/BCR"
+    st.session_state["pipe_spec_mode"] = "Wall thickness"
 
 
-# ── Calibration logic ─────────────────────────────────────────────────────────
+def sticky_number_input(label: str, key: str, fallback: float, **kwargs):
+    """number_input that survives being conditionally un-rendered.
 
-def _bccs_governs(op: OperatingPoint) -> bool:
-    """True when BCCS curve (placeholder) sets the envelope at this operating point."""
-    return op.bccs_applied_tension_kips < op.pipe_applied_tension_kips
-
-
-def _has_placeholder_params(result: EnvelopeResult) -> bool:
-    """BCR is always estimated → always True; screw-jack params add more uncertainty."""
-    return True  # BCR is never confirmed from CDS in current implementation
+    Streamlit deletes a widget's session_state entry when the widget isn't
+    instantiated on a run (e.g. screw-jack fields while Wedge is selected).
+    Without this, switching Wedge -> Buttress would silently reset those
+    fields to their min_value instead of the user's last entry. We cache the
+    last value under a plain (non-widget) key and re-seed before remount.
+    """
+    cache_key = f"_last_{key}"
+    if key not in st.session_state:
+        st.session_state[key] = st.session_state.get(cache_key, fallback)
+    val = st.sidebar.number_input(label, key=key, **kwargs)
+    st.session_state[cache_key] = val
+    return val
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 st.sidebar.title("🔩 OCTG Torque–Tension")
-st.sidebar.caption("SPE-232499-MS — Ott et al. (2026)")
+st.sidebar.caption("SPE-232499-MS — Ott et al. (2026) — entrada manual")
 st.sidebar.divider()
 
-# Connection selector
-st.sidebar.subheader("Connection")
-conn_choices = list(_CATALOG.keys()) + ["Custom"]
-conn_label = st.sidebar.selectbox("Type", conn_choices, index=1)
+# 1) Tipo de conexión — controla el screw-jack
+st.sidebar.subheader("1. Tipo de conexión")
+conn_type = st.sidebar.radio(
+    "Tipo",
+    ["Buttress / Shouldered", "Wedge"],
+    key="conn_type",
+    help="Buttress/Shouldered → screw-jack activo (F_TQ, Eq. 6). "
+         "Wedge → sin screw-jack (F_TQ = 0, curva plana).",
+)
+has_screwjack = conn_type == "Buttress / Shouldered"
 
-if conn_label == "Custom":
-    st.sidebar.markdown("**Custom connection geometry**")
-    c_cod = st.sidebar.number_input("COD [in]", 5.0, 9.0, 6.30, 0.01, format="%.2f")
-    c_tq  = st.sidebar.number_input("Operating Torque [ft·lbf]", 5000, 100000, 30600, 100)
-    c_tens = st.sidebar.number_input("Tension Capacity [kips]", 100.0, 2000.0, 641.0, 10.0)
-    c_type = st.sidebar.radio("Connection type", ["Shouldered (BTC)", "Wedge (BSP/BSL)"])
-    c_grade = st.sidebar.selectbox("Steel Grade", list(_GRADES.keys()))
-    base_conn = Connection(
-        name="Custom",
-        cod=c_cod,
-        operating_torque_ft_lbf=float(c_tq),
-        tension_capacity_kips=float(c_tens),
-        clearance_in=0.0,
-        has_screwjack=(c_type == "Shouldered (BTC)"),
-        grade=_GRADES[c_grade],
-        id_=_PIPE_ID,
+if not any(k in st.session_state for k in _KEYS):
+    _init_defaults(conn_type)
+
+if st.sidebar.button("↺ Cargar valores de ejemplo", help="Prellena con datos estimados de la tabla del paper (BTC6.30 / BSP6.05). Opcional — el modo principal es carga manual."):
+    _init_defaults(conn_type)
+    st.rerun()
+
+st.sidebar.divider()
+
+# 2) Geometría del pipe body — determina el OD/ID del caño
+st.sidebar.subheader("2. Pipe body")
+pipe_od = st.sidebar.number_input(
+    "OD caño [in]", min_value=0.1, max_value=30.0, step=0.01, format="%.3f",
+    key="pipe_od",
+)
+pipe_spec_mode = st.sidebar.radio(
+    "Especificar por", ["Wall thickness", "Peso nominal [lb/ft]", "ID directo"],
+    key="pipe_spec_mode", horizontal=True,
+)
+pipe_id_val = None
+pipe_id_error = None
+if pipe_spec_mode == "Wall thickness":
+    pipe_wall = sticky_number_input(
+        "Wall thickness [in]", "pipe_wall", _EXAMPLES[conn_type]["pipe_wall"],
+        min_value=0.01, max_value=2.0, step=0.001, format="%.3f",
     )
-    default_bcr = c_cod - 1.0
+    try:
+        pipe_id_val = pipe_id_from_wall(pipe_od, pipe_wall)
+    except ValueError as e:
+        pipe_id_error = str(e)
+elif pipe_spec_mode == "Peso nominal [lb/ft]":
+    pipe_weight = st.sidebar.number_input(
+        "Peso nominal [lb/ft]", min_value=1.0, max_value=200.0, step=0.5,
+        format="%.1f", key="pipe_weight", value=20.0,
+    )
+    try:
+        pipe_wall = wall_from_nominal_weight(pipe_od, pipe_weight)
+        pipe_id_val = pipe_id_from_wall(pipe_od, pipe_wall)
+    except ValueError as e:
+        pipe_id_error = str(e)
+else:  # ID directo — exact manufacturer value, no wall/weight approximation
+    pipe_id_val = sticky_number_input(
+        "ID caño [in]", "pipe_id_direct", _EXAMPLES[conn_type]["pipe_od"] - 2 * _EXAMPLES[conn_type]["pipe_wall"],
+        min_value=0.01, max_value=29.9, step=0.001, format="%.3f",
+        help="Dato exacto del fabricante — evita la aproximación plain-end de peso/wall.",
+    )
+    if pipe_id_val >= pipe_od:
+        pipe_id_error = f"OD ({pipe_od} in) must exceed ID ({pipe_id_val} in)"
+    pipe_wall = (pipe_od - pipe_id_val) / 2.0
+
+if pipe_id_error:
+    st.sidebar.error(f"Geometría de pipe body inválida: {pipe_id_error}")
+    st.error(f"Geometría de pipe body inválida: {pipe_id_error}")
+    st.stop()
+
+if pipe_spec_mode == "ID directo":
+    st.sidebar.caption(f"ID caño (dato directo) = **{pipe_id_val:.3f} in** — wall implícito = {pipe_wall:.3f} in")
 else:
-    base_conn = _CATALOG[conn_label]
-    default_bcr = base_conn.bcr if base_conn.bcr is not None else (base_conn.cod - 1.0)
+    st.sidebar.caption(f"ID caño (calculado) = **{pipe_id_val:.3f} in** — wall = {pipe_wall:.3f} in")
 
-# Operating conditions
-st.sidebar.subheader("Operating Conditions")
-tq_max = int(base_conn.operating_torque_ft_lbf)
-tq_applied = st.sidebar.slider("Applied Torque [ft·lbf]", 0, tq_max, int(tq_max * 0.8), 500)
-hook_load  = st.sidebar.slider("Hook Load [kips]", 0, 800, 400, 10)
+st.sidebar.divider()
 
-st.sidebar.subheader("Design Criteria")
-design_factor = st.sidebar.number_input(
-    "Design Factor", 1.0, 3.0, 1.4, 0.05, format="%.2f",
-    help="Paper cites DF=1.4 for BTC6.30 (Liu 2021). Not confirmed for all connections."
+# 3) Geometría de la conexión (BCCS / pin)
+st.sidebar.subheader("3. Geometría de la conexión")
+cod = st.sidebar.number_input(
+    "COD — Coupling OD [in]", min_value=0.1, max_value=30.0,
+    step=0.01, format="%.3f", key="geo_cod",
+    help="Eq. 2 — debe superar el ID del caño (validado al calcular).",
+)
+bcr = st.sidebar.number_input(
+    "BCR — Box Critical Root Diameter [in]", min_value=0.1,
+    max_value=30.0, step=0.005, format="%.3f", key="geo_bcr",
+    help="Eq. 2 — debe estar entre ID y COD (validado al calcular).",
+)
+st_pin = st.sidebar.number_input(
+    "ST_pin — Pin Face OD [in]", min_value=0.1, max_value=30.0,
+    step=0.005, format="%.3f", key="geo_st_pin",
+    help="Eq. 3 — debe superar el ID del caño (validado al calcular).",
 )
 
-# Geometric params expander
-with st.sidebar.expander(
-    "⚙️ Geometric Params — All PLACEHOLDER (confirm from CDS / API 5B)",
-    expanded=base_conn.has_screwjack,
-):
-    st.caption(
-        "These values are not given numerically in SPE-232499-MS. "
-        "Adjust when manufacturer CDS data is available."
-    )
-    bcr_val = st.number_input(
-        "BCR — Box Critical Root Diameter [in]",
-        min_value=round(base_conn.id_ + 0.1, 3),
-        max_value=round(base_conn.cod - 0.05, 3),
-        value=float(default_bcr),
-        step=0.005, format="%.3f",
-        help="⚠️ PLACEHOLDER — estimated from paper's 44% area advantage statement. "
-             "Confirm from Fermata Connections CDS.",
-    )
+try:
+    j_btc_geom = polar_moment_annulus(cod, bcr)
+except ValueError as e:
+    st.sidebar.error(f"COD/BCR inválidos: {e}")
+    st.error(f"Geometría inválida — COD/BCR: {e}")
+    st.stop()
 
-    if base_conn.has_screwjack:
-        st.markdown("**Screw-jack parameters (BTC only)** — all PLACEHOLDER")
-        lf_area_val = st.number_input(
-            "LFArea [in²]", 1.0, 300.0, 60.0, 5.0, format="%.1f",
-            help="⚠️ PLACEHOLDER — estimated ~60 in² from API 5B buttress geometry. "
-                 "TODO: compute from API 5B Table B.4."
+j_mode = st.sidebar.radio(
+    "J_BTC — Polar Moment", ["Calculado de COD/BCR", "Manual (valor del fabricante)"],
+    key="j_mode", horizontal=True,
+    help="Default = π/32×(COD⁴−BCR⁴). Esa fórmula anular no descuenta el material "
+         "removido por la rosca — sobreescribí con el J real si lo tenés (CDS).",
+)
+if j_mode.startswith("Calculado"):
+    j_btc = j_btc_geom
+    st.sidebar.caption(f"J_BTC = π/32×(COD⁴−BCR⁴) = **{j_btc:.2f} in⁴**")
+else:
+    j_btc = sticky_number_input(
+        "J_BTC — Polar Moment [in⁴]", "geo_j_btc_manual", j_btc_geom,
+        min_value=0.01, max_value=10_000.0, step=0.1, format="%.2f",
+    )
+    st.sidebar.caption(f"Valor geométrico de referencia = {j_btc_geom:.2f} in⁴")
+
+if has_screwjack:
+    st.sidebar.markdown("**Screw-jack (Buttress)**")
+    l_b = sticky_number_input(
+        "L_B — Coupling Length [in]", "geo_l_b", _EXAMPLES[conn_type]["l_b"],
+        min_value=0.1, max_value=60.0, step=0.05, format="%.3f",
+    )
+    l_fl = sticky_number_input(
+        "LFL — Thread Lead [in/rev]", "geo_l_fl", _EXAMPLES[conn_type]["l_fl"],
+        min_value=0.01, max_value=2.0, step=0.005, format="%.3f",
+    )
+    lf_area_val = sticky_number_input(
+        "LF_area — Load-Flank Area [in²]", "geo_lf_area", _EXAMPLES[conn_type]["lf_area"],
+        min_value=0.1, max_value=500.0, step=1.0, format="%.1f",
+    )
+else:
+    l_b = l_fl = lf_area_val = None
+
+st.sidebar.divider()
+
+# 4) Material
+st.sidebar.subheader("4. Material")
+grade_choice = st.sidebar.selectbox(
+    "Grado de acero", list(_GRADES.keys()) + ["Custom"], key="mat_grade",
+)
+if grade_choice == "Custom":
+    c_smys = st.sidebar.number_input(
+        "fSMYS [psi]", min_value=1000.0, max_value=300_000.0, value=110_000.0,
+        step=1000.0, format="%.0f",
+    )
+    c_e = st.sidebar.number_input(
+        "E — Young's modulus [psi]", min_value=1_000_000.0, max_value=60_000_000.0,
+        value=30_000_000.0, step=100_000.0, format="%.0f",
+    )
+    try:
+        grade = SteelGrade(name="Custom", smys=c_smys, E=c_e)
+    except ValueError as e:
+        st.sidebar.error(str(e))
+        st.stop()
+else:
+    grade = _GRADES[grade_choice]
+
+st.sidebar.divider()
+
+# 5) Design factor
+st.sidebar.subheader("5. Design factor")
+design_factor = st.sidebar.number_input(
+    "Design Factor", min_value=1.0, max_value=3.0, step=0.05, format="%.2f",
+    key="design_factor",
+    help="Paper cita DF=1.4 para BTC6.30 (Liu 2021). No confirmado para otras conexiones.",
+)
+
+st.sidebar.divider()
+
+# 6) Delta turns — solo aplica a Buttress (screw-jack)
+delta_mu_val = delta_ot_val = None
+dt_mode = None
+if has_screwjack:
+    st.sidebar.subheader("6. Delta turns (screw-jack)")
+    dt_mode = st.sidebar.radio(
+        "Modo",
+        ["Modo A — Tengo datos torque-turn", "Modo B — Estimar desde torque"],
+        key="dt_mode",
+        help="Δ_MU y Δ_OT no son derivables del modelo (Eq. 1 los toma como dato experimental).",
+    )
+    if dt_mode.startswith("Modo A"):
+        delta_mu_val = sticky_number_input(
+            "ΔMU — Make-up Delta Turns [rev]", "dt_delta_mu", _EXAMPLES[conn_type]["delta_mu"],
+            min_value=0.0, max_value=5.0, step=0.005, format="%.3f",
         )
-        delta_mu_val = st.number_input(
-            "ΔMU — Make-up Delta Turns [rev]", 0.0, 5.0, 0.03, 0.01, format="%.3f",
-            help="⚠️ PLACEHOLDER — from Fig. 11a (not given numerically)."
+        delta_ot_val = sticky_number_input(
+            "ΔOT — Operational Delta Turns @ Tq rated [rev]", "dt_delta_ot", _EXAMPLES[conn_type]["delta_ot"],
+            min_value=0.0, max_value=5.0, step=0.005, format="%.3f",
         )
-        delta_ot_val = st.number_input(
-            "ΔOT — Op. Delta Turns @ rated Tq [rev]", 0.0, 5.0, 0.15, 0.01, format="%.3f",
-            help="⚠️ PLACEHOLDER — from Fig. 11b (not given numerically). "
-                 "Linearly scaled for intermediate torques (ASSUMPTION — see MODEL_NOTES §6)."
-        )
-        l_b_val  = st.number_input("L_B — Coupling Length [in]", 2.0, 30.0, 13.0, 0.25, format="%.3f",
-                                    help="⚠️ PLACEHOLDER — estimated from API 5CT.")
-        st_pin_val = st.number_input("STpin — Pin Face OD [in]", round(base_conn.id_+0.1,3),
-                                      round(base_conn.cod, 3), 5.5, 0.005, format="%.3f",
-                                      help="⚠️ PLACEHOLDER — set to pipe OD as upper bound.")
-        l_fl_val = st.number_input("LFL — Thread Lead [in/rev]", 0.05, 1.0, 0.200, 0.025, format="%.3f",
-                                    help="⚠️ PLACEHOLDER — 5 TPI per API 5B. Confirm from API 5B Table B.4.")
     else:
-        lf_area_val = delta_mu_val = delta_ot_val = l_b_val = st_pin_val = l_fl_val = None
+        st.sidebar.warning(
+            "⚠️ Delta turns estimados por suposición lineal no validada — modo aproximado.",
+            icon="⚠️",
+        )
+        delta_mu_val = st.session_state.get("_last_dt_delta_mu", _EXAMPLES[conn_type]["delta_mu"])
+        delta_ot_val = st.session_state.get("_last_dt_delta_ot", _EXAMPLES[conn_type]["delta_ot"])
+        st.sidebar.caption(
+            f"Usa ΔMU = {delta_mu_val:.3f} rev y ΔOT_rated = {delta_ot_val:.3f} rev "
+            "(constantes asumidas, no medidas) escaladas linealmente con el torque "
+            "aplicado (Torque aplicado / Torque operativo máx.)."
+        )
+else:
+    st.sidebar.subheader("6. Delta turns")
+    st.sidebar.caption("No aplica — conexión Wedge, F_TQ = 0 por construcción.")
 
-# Patch connection object
-patched_conn = dc_replace(base_conn, bcr=bcr_val, st_pin=st_pin_val, l_b=l_b_val, l_fl=l_fl_val)
+st.sidebar.divider()
+
+# 7) Condiciones operativas
+st.sidebar.subheader("7. Condiciones operativas")
+tq_max = st.sidebar.number_input(
+    "Torque operativo máximo [ft·lbf]", min_value=100.0, max_value=200_000.0,
+    step=100.0, format="%.0f", key="tq_max",
+    help="Límite CDS de la conexión — define el eje X del envelope.",
+)
+tq_applied = st.sidebar.slider("Torque aplicado [ft·lbf]", 0, int(tq_max), int(tq_max * 0.8), 100)
+hook_load = st.sidebar.slider("Hook Load [kips]", 0, 1500, 400, 10)
+
+# ── Build Connection ─────────────────────────────────────────────────────────
+
+try:
+    conn = Connection(
+        name="Custom",
+        cod=cod,
+        operating_torque_ft_lbf=float(tq_max),
+        tension_capacity_kips=1.0,  # not used by compute_envelope/check_operating_point
+        clearance_in=0.0,
+        has_screwjack=has_screwjack,
+        grade=grade,
+        id_=pipe_id_val,
+        bcr=bcr,
+        st_pin=st_pin,
+        l_b=l_b,
+        l_fl=l_fl,
+        lf_area_in2=lf_area_val,
+        delta_mu=delta_mu_val,
+        delta_ot=delta_ot_val,
+    )
+except ValueError as e:
+    st.error(f"Geometría inválida: {e}")
+    st.stop()
+
 sj_overrides: dict = {}
-if base_conn.has_screwjack:
+if has_screwjack:
     sj_overrides = dict(lf_area_in2=lf_area_val, delta_mu=delta_mu_val, delta_ot=delta_ot_val)
 
 # ── Compute ───────────────────────────────────────────────────────────────────
 
 try:
-    result = compute_envelope(patched_conn, design_factor=design_factor,
-                               n_points=300, **sj_overrides)
+    result = compute_envelope(conn, design_factor=design_factor, n_points=300,
+                               pipe_od=pipe_od, j_bccs=j_btc, **sj_overrides)
 except ValueError as e:
     st.error(f"Envelope error: {e}")
     st.stop()
 
 try:
-    op = check_operating_point(patched_conn, float(tq_applied), float(hook_load),
-                                design_factor=design_factor, **sj_overrides)
+    op = check_operating_point(conn, float(tq_applied), float(hook_load),
+                                design_factor=design_factor, pipe_od=pipe_od,
+                                j_bccs=j_btc, **sj_overrides)
 except ValueError as e:
     st.error(f"Operating point error: {e}")
     st.stop()
 
+
+def _bccs_governs(op: OperatingPoint) -> bool:
+    return op.bccs_applied_tension_kips < op.pipe_applied_tension_kips
+
+
 bccs_gov = _bccs_governs(op)
 
-# ── Title & calibration banner ────────────────────────────────────────────────
+# ── Calibration state — "using defaults/example" or "Modo B estimation" ───────
+
+_ex = _EXAMPLES[conn_type]
+_cmp_pairs = [
+    (cod, _ex["cod"]), (bcr, _ex["bcr"]), (st_pin, _ex["st_pin"]),
+    (pipe_od, _ex["pipe_od"]), (pipe_wall, _ex["pipe_wall"]),
+]
+if has_screwjack:
+    _cmp_pairs += [(l_b, _ex["l_b"]), (l_fl, _ex["l_fl"]), (lf_area_val, _ex["lf_area"])]
+using_example_values = all(abs(a - b) < 1e-9 for a, b in _cmp_pairs)
+estimating_delta_turns = has_screwjack and dt_mode is not None and dt_mode.startswith("Modo B")
+uncalibrated = using_example_values or estimating_delta_turns
+
+# ── Title ─────────────────────────────────────────────────────────────────────
 
 st.title("OCTG Torque–Tension Interaction")
 st.markdown(
-    f"**{conn_label}** &nbsp;|&nbsp; 5.5-in 20# P110 &nbsp;|&nbsp; "
-    f"DF = {design_factor:.2f} &nbsp;|&nbsp; *SPE-232499-MS, Ott et al. (2026)*"
+    f"**{conn_type}** &nbsp;|&nbsp; {grade.name} &nbsp;|&nbsp; "
+    f"COD {cod:.2f} in &nbsp;|&nbsp; DF = {design_factor:.2f} &nbsp;|&nbsp; "
+    f"*SPE-232499-MS, Ott et al. (2026)*"
 )
 
-# Permanent calibration banner
-st.error(
-    "**⚠️ PARÁMETROS NO CALIBRADOS** — BCR, STpin, LB, LFArea, ΔMU, ΔOT son "
-    "**PLACEHOLDER** (no dados numéricamente en el paper). "
-    "La curva BCCS NO está validada contra datos CDS Fermata ni contra Fig. 11. "
-    "**No usar para decisiones de campo hasta calibrar con datos reales.** "
-    "Ver inventario de parámetros ↓",
-    icon="🚨",
+# Always-on general disclaimer (calm tone)
+st.info(
+    "Modelo analítico basado en SPE-232499-MS — **no es una herramienta certificada**. "
+    "Verificar contra datos CDS del fabricante y criterios de la operadora antes de "
+    "cualquier decisión de campo.",
+    icon="ℹ️",
 )
+
+# Conditional prominent warning — only when using example/default values or Modo B
+if uncalibrated:
+    reasons = []
+    if using_example_values:
+        reasons.append("la geometría todavía corresponde a los **valores de ejemplo** (no se cargaron datos propios)")
+    if estimating_delta_turns:
+        reasons.append("los **delta turns están estimados** por suposición lineal (Modo B), no medidos")
+    st.warning(
+        "**⚠️ RESULTADO PRELIMINAR** — " + "; y ".join(reasons) + ". "
+        "No usar para decisiones de campo hasta reemplazar por datos reales.",
+        icon="⚠️",
+    )
 
 # ── KPI row ───────────────────────────────────────────────────────────────────
 
 util_pct = op.utilization * 100
 
-# Determine status considering calibration
-if bccs_gov:
-    # BCCS governs — assessment is preliminary regardless of safe/unsafe
+if uncalibrated:
     if op.safe:
-        kpi_status = "⚠️ PRELIMINAR-SEGURO"
-        kpi_color = "off"
-        verdict_tag = "PRELIMINARY"
+        kpi_status, kpi_verdict = "⚠️ PRELIMINAR-SEGURO", "PRELIMINARY"
     else:
-        kpi_status = "⚠️ PRELIMINAR-EXCEDIDO"
-        kpi_color = "off"
-        verdict_tag = "PRELIMINARY"
-    governing_label = "BCCS — NO CALIBRADO"
+        kpi_status, kpi_verdict = "⚠️ PRELIMINAR-EXCEDIDO", "PRELIMINARY"
+    governing_label = "BCCS" if bccs_gov else "Pipe body"
+    governing_label += " — ejemplo/estimado"
 else:
-    # Pipe body governs — reliable assessment
     if op.utilization <= 0.8:
-        kpi_status = "✅ SEGURO (pipe-limited)"
-        kpi_color = "normal"
-        verdict_tag = "RELIABLE"
+        kpi_status, kpi_verdict = "✅ SEGURO", "RELIABLE"
     elif op.utilization <= 1.0:
-        kpi_status = "⚠️ PRECAUCIÓN (pipe-limited)"
-        kpi_color = "off"
-        verdict_tag = "RELIABLE"
+        kpi_status, kpi_verdict = "⚠️ PRECAUCIÓN", "RELIABLE"
     else:
-        kpi_status = "🚨 EXCEDIDO (pipe-limited)"
-        kpi_color = "inverse"
-        verdict_tag = "RELIABLE"
-    governing_label = "Pipe body (CONFIABLE)"
+        kpi_status, kpi_verdict = "🚨 EXCEDIDO", "RELIABLE"
+    governing_label = "BCCS (conexión)" if bccs_gov else "Pipe body"
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Estado", kpi_status)
 c2.metric("Utilización", f"{util_pct:.1f}%", delta=f"{util_pct-100:.1f}% vs límite")
 c3.metric("Allowable [kips]", f"{op.allowable_kips:.1f}", help="Envelope / DF")
 c4.metric("Componente limitante", governing_label)
-
-# Preliminary warning box when BCCS governs
-if bccs_gov:
-    st.warning(
-        "**EVALUACIÓN PRELIMINAR — no usar para decisión de campo.** "
-        f"El punto operativo ({tq_applied/1000:.1f} kft·lbf, {hook_load} kips) cae en la zona "
-        "gobernada por la curva BCCS, que depende de parámetros placeholder no calibrados. "
-        "El veredicto puede cambiar con BCR, ΔMU y ΔOT reales. "
-        "La curva Pipe body (negra) sigue siendo confiable en esta zona.",
-        icon="⚠️",
-    )
 
 st.divider()
 
@@ -273,84 +464,70 @@ col_plot, col_table = st.columns([3, 1])
 
 with col_plot:
     st.subheader("Torque–Tension Envelope")
-    color = _conn_color(base_conn.name)
-    tq_x  = result.torques_ft_lbf / 1_000  # kft·lbf
+    tq_x = result.torques_ft_lbf / 1_000  # kft·lbf
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
 
-    # ── BCCS-governed zone: hatched background
     diff = result.bccs_curve_kips - result.pipe_curve_kips
     bccs_zone = diff < 0
-    if bccs_zone.any():
-        # Fill the region where BCCS < Pipe (preliminary zone)
+    if bccs_zone.any() and uncalibrated:
         ax.fill_between(
             tq_x, result.bccs_curve_kips, result.pipe_curve_kips,
             where=bccs_zone, alpha=0.07, color="red", hatch="////",
-            label="Zona BCCS-limitada (NO CALIBRADO)",
+            label="Zona BCCS-limitada (preliminar)",
         )
 
-    # ── Pipe body curve — RELIABLE
     ax.plot(tq_x, result.pipe_curve_kips, color="black", lw=2.0, ls="-",
-            label=f"Pipe body — CONFIABLE (API 5CT, {result.pipe_body_kips:.0f} kips)")
+            label=f"Pipe body ({result.pipe_body_kips:.0f} kips)")
 
-    # ── BCCS curve — NOT CALIBRATED
-    ax.plot(tq_x, result.bccs_curve_kips, color=color, lw=1.5, ls="--", alpha=0.85,
-            label=f"BCCS — ⚠️ NO CALIBRADO (placeholder BCR, ΔMU, ΔOT)")
+    bccs_label = "BCCS" + (" — ⚠️ ejemplo/estimado" if uncalibrated else "")
+    ax.plot(tq_x, result.bccs_curve_kips, color=_CONN_COLOR, lw=1.5, ls="--", alpha=0.85,
+            label=bccs_label)
 
-    # ── Envelope = min(BCCS, Pipe)
-    ax.plot(tq_x, result.envelope_kips, color=color, lw=2.5, ls="-",
+    ax.plot(tq_x, result.envelope_kips, color=_CONN_COLOR, lw=2.5, ls="-",
             label=f"Envelope = min(BCCS, Pipe) [DF={design_factor:.1f} para allowable]")
-    ax.fill_between(tq_x, result.envelope_kips, alpha=0.08, color=color)
+    ax.fill_between(tq_x, result.envelope_kips, alpha=0.08, color=_CONN_COLOR)
 
-    # ── F_TQ component (optional)
     if result.has_screwjack and result.f_tq_kips is not None:
-        ax.plot(tq_x, result.f_tq_kips, color=color, lw=0.9, ls="-.",
-                alpha=0.5, label="F_TQ screw-jack [kips] — placeholder")
+        ax.plot(tq_x, result.f_tq_kips, color=_CONN_COLOR, lw=0.9, ls="-.",
+                alpha=0.5, label="F_TQ screw-jack [kips]")
 
-    # ── Operating point
-    pt_colors = {"RELIABLE": {"safe": "#2ca02c", "caution": "#ff7f0e", "unsafe": "#d62728"},
-                 "PRELIMINARY": {"safe": "#ff7f0e", "caution": "#ff7f0e", "unsafe": "#d62728"}}
-    if verdict_tag == "RELIABLE":
-        pt_c = pt_colors["RELIABLE"]["safe"] if op.utilization <= 0.8 else (
-               pt_colors["RELIABLE"]["caution"] if op.utilization <= 1.0 else pt_colors["RELIABLE"]["unsafe"])
+    if kpi_verdict == "RELIABLE":
+        pt_c = "#2ca02c" if op.utilization <= 0.8 else ("#ff7f0e" if op.utilization <= 1.0 else "#d62728")
     else:
-        pt_c = pt_colors["PRELIMINARY"]["caution"] if op.safe else pt_colors["PRELIMINARY"]["unsafe"]
+        pt_c = "#ff7f0e" if op.safe else "#d62728"
 
-    ax.scatter([tq_applied/1000], [hook_load], c=pt_c, s=140, zorder=6,
+    ax.scatter([tq_applied / 1000], [hook_load], c=pt_c, s=140, zorder=6,
                edgecolors="black", lw=0.8, marker="*",
                label=f"Punto op. ({tq_applied/1000:.1f} kft·lbf, {hook_load} kips)")
     ax.annotate(
-        f"  {hook_load} kips\n  Util: {util_pct:.1f}%\n  [{verdict_tag}]",
-        xy=(tq_applied/1000, hook_load), fontsize=7.5, color=pt_c, fontweight="bold",
+        f"  {hook_load} kips\n  Util: {util_pct:.1f}%\n  [{kpi_verdict}]",
+        xy=(tq_applied / 1000, hook_load), fontsize=7.5, color=pt_c, fontweight="bold",
         va="bottom",
     )
 
-    # ── Calibration watermark in BCCS zone
-    if bccs_zone.any():
+    if uncalibrated and bccs_zone.any():
         mid_x = tq_x[bccs_zone].mean()
-        mid_y = (result.bccs_curve_kips[bccs_zone].mean() +
-                 result.pipe_curve_kips[bccs_zone].mean()) / 2
-        ax.text(mid_x, mid_y, "NO CALIBRADO", ha="center", va="center",
+        mid_y = (result.bccs_curve_kips[bccs_zone].mean() + result.pipe_curve_kips[bccs_zone].mean()) / 2
+        ax.text(mid_x, mid_y, "EJEMPLO / ESTIMADO", ha="center", va="center",
                 fontsize=7, color="red", alpha=0.4, rotation=10, fontweight="bold")
 
     ax.set_xlabel("Applied Torque [kft·lbf]", fontsize=11)
     ax.set_ylabel("Applied Tension [kips]", fontsize=11)
-    ax.set_title(
-        f"Torque–Tension Envelope — {base_conn.name}\n"
-        f"(curva BCCS: placeholder params — validacion PENDIENTE)",
-        fontsize=11, fontweight="bold",
-    )
+    ax.set_title(f"Torque–Tension Envelope — {conn_type}, COD {cod:.2f} in", fontsize=11, fontweight="bold")
     ax.set_xlim(0, tq_max / 1000)
-    ax.set_ylim(0, max(800, result.pipe_body_kips * 1.2))
+    y_top = max(800.0, result.pipe_body_kips * 1.2, result.bccs_curve_kips.max() * 1.1, hook_load * 1.15)
+    ax.set_ylim(0, y_top)
     ax.legend(fontsize=7.5, loc="lower left", framealpha=0.9)
     ax.grid(True, alpha=0.25)
-    ax.text(
-        0.99, 0.99,
-        "⚠️ RESULTADO PRELIMINAR\nPendiente calibracion con\ndatos CDS + Fig.11",
-        transform=ax.transAxes, fontsize=7, ha="right", va="top",
-        color="red", alpha=0.5,
-        bbox=dict(boxstyle="round", fc="white", ec="red", alpha=0.5),
-    )
+
+    if uncalibrated:
+        ax.text(
+            0.99, 0.99, "⚠️ RESULTADO PRELIMINAR\nGeometría de ejemplo o\ndelta turns estimados",
+            transform=ax.transAxes, fontsize=7, ha="right", va="top",
+            color="red", alpha=0.5,
+            bbox=dict(boxstyle="round", fc="white", ec="red", alpha=0.5),
+        )
 
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
@@ -359,36 +536,34 @@ with col_plot:
 
 with col_table:
     st.subheader("Valores Calculados")
-    st.caption("(⚠️) = depende de parámetros placeholder")
 
-    a_bccs = bccs_area(patched_conn.cod, bcr_val)
-    j_bccs = polar_moment_annulus(patched_conn.cod, bcr_val)
-    a_pipe = math.pi / 4 * (_PIPE_OD**2 - _PIPE_ID**2)
-    # Axial stress: total axial force on BCCS = F_TQ + F_hook
+    a_bccs = bccs_area(conn.cod, bcr)
+    j_bccs = j_btc
+    a_pipe = math.pi / 4 * (pipe_od**2 - pipe_id_val**2)
     sigma_axial = (op.f_tq_kips + op.hook_load_kips) * 1_000 / a_bccs if a_bccs > 0 else 0
-    tau_outer = (float(tq_applied) * 12 * (patched_conn.cod / 2) / j_bccs) if j_bccs > 0 else 0
+    tau_outer = (float(tq_applied) * 12 * (conn.cod / 2) / j_bccs) if j_bccs > 0 else 0
     vm_stress = math.sqrt(sigma_axial**2 + 3 * tau_outer**2)
 
     rows = [
-        ("A_BCCS [in²] (⚠️)",         f"{a_bccs:.3f}"),
-        ("J_BCCS [in⁴] (⚠️)",         f"{j_bccs:.2f}"),
-        ("A_pipe [in²] ✓",            f"{a_pipe:.3f}"),
-        ("",                           ""),
-        ("F_TQ Eq.6 [kips] (⚠️)",     f"{op.f_tq_kips:.1f}"),
-        ("P_BTC Eq.8 BCCS (⚠️) [kips]", f"{op.p_btc_kips:.1f}"),
-        ("P_total Eq.9 [kips] (⚠️)",  f"{op.p_total_kips:.1f}"),
-        ("F_hook [kips] ✓",           f"{hook_load:.1f}"),
-        ("",                           ""),
-        ("BCCS curve (⚠️) [kips]",    f"{op.bccs_applied_tension_kips:.1f}"),
-        ("Pipe curve ✓ [kips]",        f"{op.pipe_applied_tension_kips:.1f}"),
-        ("Envelope [kips]",            f"{op.envelope_kips:.1f}"),
-        ("Allowable [kips]",           f"{op.allowable_kips:.1f}"),
-        ("Utilización",                f"{util_pct:.1f}%"),
-        ("",                           ""),
-        ("σ_axial [psi] (⚠️)",        f"{sigma_axial:,.0f}"),
-        ("τ_outer [psi] (⚠️)",        f"{tau_outer:,.0f}"),
-        ("σ_VM [psi] (⚠️)",           f"{vm_stress:,.0f}"),
-        ("SMYS [psi] ✓",              f"{patched_conn.grade.smys:,.0f}"),
+        ("A_BCCS [in²]", f"{a_bccs:.3f}"),
+        ("J_BCCS [in⁴]", f"{j_bccs:.2f}"),
+        ("A_pipe [in²]", f"{a_pipe:.3f}"),
+        ("", ""),
+        ("F_TQ Eq.6 [kips]", f"{op.f_tq_kips:.1f}"),
+        ("P_BTC Eq.8 BCCS [kips]", f"{op.p_btc_kips:.1f}"),
+        ("P_total Eq.9 [kips]", f"{op.p_total_kips:.1f}"),
+        ("F_hook [kips]", f"{hook_load:.1f}"),
+        ("", ""),
+        ("BCCS curve [kips]", f"{op.bccs_applied_tension_kips:.1f}"),
+        ("Pipe curve [kips]", f"{op.pipe_applied_tension_kips:.1f}"),
+        ("Envelope [kips]", f"{op.envelope_kips:.1f}"),
+        ("Allowable [kips]", f"{op.allowable_kips:.1f}"),
+        ("Utilización", f"{util_pct:.1f}%"),
+        ("", ""),
+        ("σ_axial [psi]", f"{sigma_axial:,.0f}"),
+        ("τ_outer [psi]", f"{tau_outer:,.0f}"),
+        ("σ_VM [psi]", f"{vm_stress:,.0f}"),
+        ("SMYS [psi]", f"{grade.smys:,.0f}"),
     ]
 
     for label, value in rows:
@@ -403,87 +578,56 @@ with col_table:
 
 st.divider()
 
-with st.expander("📋 Inventario de Parámetros — Placeholder vs Confirmado", expanded=True):
-    st.markdown("### Parámetros del modelo")
-    placeholder_rows = [
-        ("BCR",     f"{bcr_val:.3f} in",    "⚠️ PLACEHOLDER",   "Estimado de '44% area advantage'. Confirmar de CDS Fermata."),
-        ("STpin",   f"{st_pin_val or 5.5:.3f} in",  "⚠️ PLACEHOLDER",   "= OD caño (cota superior). Confirmar de CDS."),
-        ("LB",      f"{l_b_val or 13.0:.3f} in",    "⚠️ PLACEHOLDER",   "Estimado de API 5CT Gr. B. Confirmar de CDS."),
-        ("LFL",     "0.200 in/rev",         "⚠️ PLACEHOLDER",   "5 TPI BTC, pendiente confirmar API 5B Tabla B.4."),
-        ("LFArea",  f"{lf_area_val or 60.0:.1f} in²", "⚠️ PLACEHOLDER", "Estimado de geometría API 5B. TODO precisar."),
-        ("ΔMU",     f"{delta_mu_val or 0.03:.3f} rev", "⚠️ PLACEHOLDER", "No dado en paper. Elegido para reproducir cruce topológico Fig.12b."),
-        ("ΔOT",     f"{delta_ot_val or 0.15:.3f} rev", "⚠️ PLACEHOLDER", "No dado en paper. Escala lineal con Tq (SUPOSICIÓN)."),
-        ("ΔOT(Tq) ∝ Tq", "Lineal",         "⚠️ SUPOSICIÓN",    "No en el paper. Reemplazar con datos de Fig.11 torque-turn."),
-    ]
-    confirmed_rows = [
-        ("OD caño",          "5.500 in",      "✓ CONFIRMADO", "API 5CT (5.5-in, 20 lb/ft)"),
-        ("ID caño",          "4.778 in",      "✓ CONFIRMADO", "API 5CT (5.5-in, 20 lb/ft)"),
-        ("fSMYS (P110)",     "110,000 psi",   "✓ CONFIRMADO", "API 5CT / API 5C3"),
-        ("COD",              f"{base_conn.cod:.2f} in", "✓ CONFIRMADO", "Tabla 1, SPE-232499-MS"),
-        ("Tq operacional",   f"{base_conn.operating_torque_ft_lbf:,.0f} ft·lbf", "✓ CONFIRMADO", "Tabla 1"),
-        ("Tensión cap.",     f"{base_conn.tension_capacity_kips:.0f} kips", "✓ CONFIRMADO", "Tabla 1"),
-        ("has_screwjack",    "BTC=Sí / Wedge=No", "✓ CONFIRMADO", "Tipo de conexión"),
-        ("Coef. 0.096167",   "API RP 7G",     "✓ CONFIRMADO", "2/(12√3) — factor de unidades Von Mises"),
-        ("Eq. 4–9",          "Formas algebraicas", "✓ CONFIRMADO", "Verificadas contra imágenes PDF del paper"),
-    ]
-
-    col_ph, col_cf = st.columns(2)
-    with col_ph:
-        st.markdown("**Parámetros PLACEHOLDER (no en el paper)**")
-        for param, val, status, note in placeholder_rows:
-            st.markdown(f"- **{param}** = `{val}` — *{note}*")
-    with col_cf:
-        st.markdown("**Parámetros CONFIRMADOS**")
-        for param, val, status, note in confirmed_rows:
-            st.markdown(f"- **{param}** = `{val}` ✓ — *{note}*")
-
-    st.info(
-        "**Criterio de calibración cruzada (MODEL_NOTES §6):** Cuando se disponga de "
-        "datos CDS + Fig. 11, los dos síntomas deben corregirse JUNTOS: "
-        "(1) cruce BTC6.05 en ~20 kft·lbf, y (2) BTC6.30 converge hacia la curva Pipe. "
-        "Si solo se corrige uno, revisar el ensamble Eq. 6/8/9 y la estimación de BCR.",
-        icon="ℹ️",
-    )
-
-with st.expander("📐 Especificaciones de Conexión — Tabla 1 SPE-232499-MS"):
+with st.expander("📐 Resumen de Geometría e Inputs"):
     c1, c2, c3 = st.columns(3)
-    c1.metric("COD", f"{base_conn.cod:.2f} in")
-    c1.metric("BCR (est.)", f"{bcr_val:.3f} in", help="⚠️ Placeholder")
-    c2.metric("Tq operacional", f"{base_conn.operating_torque_ft_lbf:,.0f} ft·lbf")
-    c2.metric("Capacidad tensil", f"{base_conn.tension_capacity_kips:.0f} kips")
-    c3.metric("Clearance radial", f"{base_conn.clearance_in:.3f} in")
-    c3.metric("Screw-jack", "Sí (BTC)" if base_conn.has_screwjack else "No (Wedge)")
+    c1.metric("COD", f"{cod:.3f} in")
+    c1.metric("BCR", f"{bcr:.3f} in")
+    c1.metric("ST_pin", f"{st_pin:.3f} in")
+    c2.metric("OD caño", f"{pipe_od:.3f} in")
+    c2.metric("ID caño (calc.)", f"{pipe_id_val:.3f} in")
+    c2.metric("Wall (calc.)", f"{pipe_wall:.3f} in")
+    c3.metric("Torque operativo máx.", f"{tq_max:,.0f} ft·lbf")
+    c3.metric("Screw-jack", "Sí (Buttress)" if has_screwjack else "No (Wedge)")
+    if has_screwjack:
+        st.caption(
+            f"L_B = {l_b:.3f} in | LFL = {l_fl:.3f} in/rev | LF_area = {lf_area_val:.1f} in² | "
+            f"ΔMU = {delta_mu_val:.3f} rev | ΔOT_rated = {delta_ot_val:.3f} rev "
+            f"({'medido' if dt_mode and dt_mode.startswith('Modo A') else 'estimado'})"
+        )
 
 with st.expander("📖 Notas del Modelo y Limitaciones"):
     st.markdown("""
     **Modelo analítico — SPE-232499-MS, Ott et al. (2026)**
 
-    | Ecuación | Descripción | Estado |
-    |----------|-------------|--------|
-    | Eq. 1 | L_OT = (ΔMU + ΔOT) × LFL | ✓ Paper |
-    | Eq. 2 | A_BCCS = π/4 × (COD² − BCR²) | ✓ Paper |
-    | Eq. 3 | FA_pin = π/4 × (STpin² − ID²) | ✓ Paper |
-    | Eq. 4 | εR = A_BCCS / (A_BCCS + FA_pin + LFArea) | ✓ Confirmada |
-    | Eq. 5 | δ = LOT × εR | ✓ Confirmada |
-    | Eq. 6 | F_TQ = δ × E × A_BCCS / L_B | ✓ Confirmada |
-    | Eq. 7 | Q_T = 0.096167 × (J/D) × √(Ym²−(P/A)²) [ft·lbf] | ✓ API RP 7G |
-    | Eq. 8 | P_BTC = A × (fSMYS − √(fSMYS²−(Tq·D/(0.096167·J))²)) | ✓ Confirmada |
-    | Eq. 9 | P_total = F_TQ + P_BTC | ✓ Confirmada |
+    | Ecuación | Descripción |
+    |----------|-------------|
+    | Eq. 1 | L_OT = (ΔMU + ΔOT) × LFL |
+    | Eq. 2 | A_BCCS = π/4 × (COD² − BCR²) |
+    | Eq. 3 | FA_pin = π/4 × (STpin² − ID²) |
+    | Eq. 4 | εR = A_BCCS / (A_BCCS + FA_pin + LFArea) |
+    | Eq. 5 | δ = LOT × εR |
+    | Eq. 6 | F_TQ = δ × E × A_BCCS / L_B |
+    | Eq. 7 | Q_T = 0.096167 × (J/D) × √(Ym²−(P/A)²) [ft·lbf] |
+    | Eq. 8 | P_BTC = A × (fSMYS − √(fSMYS²−(Tq·D/(0.096167·J))²)) |
+    | Eq. 9 | P_total = F_TQ + P_BTC |
 
-    **Interpretación del eje Y (MODEL_NOTES §6 — HIPÓTESIS DERIVADA):**
-    - Curva Pipe: A_pipe·fSMYS − P_BTC_pipe(Tq) — **confiable** (geometría API 5CT)
-    - Curva BCCS: A_BCCS·fSMYS − P_total(Tq) — **NO calibrada** (BCR, ΔMU, ΔOT placeholder)
-    - Envelope: min(BCCS, Pipe) — **confiable solo en zona Pipe-limitada**
+    **Interpretación del eje Y:**
+    - Curva Pipe: A_pipe·fSMYS − P_BTC_pipe(Tq)
+    - Curva BCCS: A_BCCS·fSMYS − P_total(Tq)
+    - Envelope: min(BCCS, Pipe)
 
     **Limitaciones:**
-    - ΔOT ∝ Tq asumido lineal (no en el paper); reemplazar con datos de Fig. 11
-    - Modelo elástico (Beer, 2015); inválido más allá del límite de fluencia
-    - Design Factor 1.4 citado para BTC6.30 (Liu 2021); no confirmado para las 4 conexiones
-    - Cruce BTC6.05 con placeholders ocurre a ~8.9 kft·lbf (paper muestra ~20 kft·lbf)
+    - Δ_MU y Δ_OT son datos experimentales (Eq. 1) — no derivables del modelo. En Modo B,
+      Δ_OT se estima asumiendo escala lineal con el torque aplicado (Δ_OT ∝ Tq); esta
+      suposición NO está validada en el paper.
+    - Modelo elástico (Beer, 2015); inválido más allá del límite de fluencia.
+    - El wall/ID del caño derivado del peso nominal usa la aproximación API 5CT
+      W ≈ 10.69·t·(OD−t) (plain-end); puede diferir levemente del peso de catálogo.
+    - Herramienta de exploración analítica — no reemplaza el CDS del fabricante ni
+      validación experimental (torque-turn, Fig. 11 del paper).
     """)
 
 st.caption(
     "SPE-232499-MS — Ott, Del Castillo, Broussard (Fermata Connections, 2026) | "
-    "Imperial: in, lbf, psi, ft·lbf | "
-    "⚠️ NO VALIDADO para uso en campo — requiere calibración con datos CDS + Fig. 11"
+    "Imperial: in, lbf, psi, ft·lbf | Modelo analítico — no certificado para uso en campo"
 )

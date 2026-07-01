@@ -98,6 +98,8 @@ def compute_envelope(
     lf_area_in2: Optional[float] = None,
     delta_mu: Optional[float] = None,
     delta_ot: Optional[float] = None,
+    pipe_od: Optional[float] = None,
+    j_bccs: Optional[float] = None,
 ) -> EnvelopeResult:
     """Generate torque–tension envelope for one connection (two-curve model).
 
@@ -112,6 +114,11 @@ def compute_envelope(
         delta_mu:      Override for connection.delta_mu [rev].
         delta_ot:      Override for connection.delta_ot [rev] — rated at operating torque.
                        ⚠️ Linearly scaled for intermediate Tq (see module docstring).
+        pipe_od:       Pipe body outer diameter [in]. Defaults to 5.5 in (this study).
+        j_bccs:        Override for the BCCS polar moment of inertia [in⁴]. Defaults
+                       to the annular estimate π/32×(COD⁴−BCR⁴), which does not
+                       account for material removed by the thread — supply the
+                       manufacturer's measured value when available.
 
     Returns:
         EnvelopeResult with arrays in ft·lbf and kips.
@@ -121,16 +128,18 @@ def compute_envelope(
     if n_points < 2:
         raise ValueError(f"n_points must be >= 2, got {n_points}")
 
+    pipe_od_val = pipe_od if pipe_od is not None else _PIPE_OD
+
     # ---- BCCS geometry ----
     bcr = connection.require("bcr", connection.bcr)
     a_bccs = bccs_area(connection.cod, bcr)
-    j_bccs = polar_moment_annulus(connection.cod, bcr)
+    j_bccs = j_bccs if j_bccs is not None else polar_moment_annulus(connection.cod, bcr)
     smys = connection.grade.smys
     bccs_capacity = a_bccs * smys  # lbf — upper bound at Tq=0, P=0
 
-    # ---- Pipe body geometry (fixed OD=5.5 in for this study) ----
-    a_pipe = math.pi / 4.0 * (_PIPE_OD**2 - connection.id_**2)
-    j_pipe = math.pi / 32.0 * (_PIPE_OD**4 - connection.id_**4)
+    # ---- Pipe body geometry ----
+    a_pipe = math.pi / 4.0 * (pipe_od_val**2 - connection.id_**2)
+    j_pipe = math.pi / 32.0 * (pipe_od_val**4 - connection.id_**4)
     pipe_capacity = a_pipe * smys  # lbf
 
     # ---- Torque sweep ----
@@ -139,7 +148,7 @@ def compute_envelope(
 
     # ---- P_BTC for BCCS and pipe body (always computable) ----
     pbtc_bccs_arr = np.array([p_btc(tq, connection.cod, j_bccs, smys, a_bccs) for tq in torques])
-    pbtc_pipe_arr = np.array([p_btc(tq, _PIPE_OD, j_pipe, smys, a_pipe) for tq in torques])
+    pbtc_pipe_arr = np.array([p_btc(tq, pipe_od_val, j_pipe, smys, a_pipe) for tq in torques])
 
     # ---- F_TQ sweep (screw-jack) ----
     screw_available = False
@@ -210,6 +219,8 @@ def check_operating_point(
     lf_area_in2: Optional[float] = None,
     delta_mu: Optional[float] = None,
     delta_ot: Optional[float] = None,
+    pipe_od: Optional[float] = None,
+    j_bccs: Optional[float] = None,
 ) -> OperatingPoint:
     """Evaluate a single (Tq, F_hook) point against the two-curve envelope.
 
@@ -222,6 +233,9 @@ def check_operating_point(
         f_hook_kips: Applied hook load [kips].
         design_factor: Safety factor (default 1.4).
         lf_area_in2, delta_mu, delta_ot: Override values for BTC screw-jack params.
+        pipe_od: Pipe body outer diameter [in]. Defaults to 5.5 in (this study).
+        j_bccs: Override for the BCCS polar moment of inertia [in⁴]. Defaults to
+               the annular estimate π/32×(COD⁴−BCR⁴) — see compute_envelope.
 
     Returns:
         OperatingPoint with all intermediate quantities and safe/unsafe flag.
@@ -231,18 +245,20 @@ def check_operating_point(
     if f_hook_kips < 0:
         raise ValueError(f"f_hook_kips must be >= 0, got {f_hook_kips}")
 
+    pipe_od_val = pipe_od if pipe_od is not None else _PIPE_OD
+
     bcr = connection.require("bcr", connection.bcr)
     a_bccs = bccs_area(connection.cod, bcr)
-    j_bccs = polar_moment_annulus(connection.cod, bcr)
+    j_bccs = j_bccs if j_bccs is not None else polar_moment_annulus(connection.cod, bcr)
     smys = connection.grade.smys
 
     # Pipe body
-    a_pipe = math.pi / 4.0 * (_PIPE_OD**2 - connection.id_**2)
-    j_pipe = math.pi / 32.0 * (_PIPE_OD**4 - connection.id_**4)
+    a_pipe = math.pi / 4.0 * (pipe_od_val**2 - connection.id_**2)
+    j_pipe = math.pi / 32.0 * (pipe_od_val**4 - connection.id_**4)
 
     # P_BTC for BCCS and pipe (Eq. 8)
     pbtc_bccs_val = p_btc(tq_ft_lbf, connection.cod, j_bccs, smys, a_bccs)
-    pbtc_pipe_val = p_btc(tq_ft_lbf, _PIPE_OD, j_pipe, smys, a_pipe)
+    pbtc_pipe_val = p_btc(tq_ft_lbf, pipe_od_val, j_pipe, smys, a_pipe)
 
     # F_TQ (Eq. 6)
     f_tq_val = 0.0
