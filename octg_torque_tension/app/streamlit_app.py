@@ -307,10 +307,11 @@ if has_screwjack:
             min_value=0.0, max_value=5.0, step=0.005, format="%.3f",
         )
     else:
-        st.sidebar.warning(
-            "⚠️ Delta turns estimados por suposición lineal no validada — modo aproximado.",
-            icon="⚠️",
-        )
+        # BANNER DESACTIVADO - reponer acá
+        # st.sidebar.warning(
+        #     "⚠️ Delta turns estimados por suposición lineal no validada — modo aproximado.",
+        #     icon="⚠️",
+        # )
         delta_mu_val = st.session_state.get("_last_dt_delta_mu", _EXAMPLES[conn_type]["delta_mu"])
         delta_ot_val = st.session_state.get("_last_dt_delta_ot", _EXAMPLES[conn_type]["delta_ot"])
         st.sidebar.caption(
@@ -407,26 +408,29 @@ st.markdown(
     f"COD {cod:.2f} in &nbsp;|&nbsp; DF = {design_factor:.2f}"
 )
 
+# BANNER DESACTIVADO - reponer acá
 # Always-on general disclaimer (calm tone)
-st.info(
-    "Modelo analítico — **no es una herramienta certificada**. "
-    "Verificar contra datos CDS del fabricante y criterios de la operadora antes de "
-    "cualquier decisión de campo.",
-    icon="ℹ️",
-)
+# st.info(
+#     "Modelo analítico — **no es una herramienta certificada**. "
+#     "Verificar contra datos CDS del fabricante y criterios de la operadora antes de "
+#     "cualquier decisión de campo.",
+#     icon="ℹ️",
+# )
 
+# BANNER DESACTIVADO - reponer acá
 # Conditional prominent warning — only when using example/default values or Modo B
+# Lógica conservada (reasons se sigue calculando) — solo se suprime el render.
 if uncalibrated:
     reasons = []
     if using_example_values:
         reasons.append("la geometría todavía corresponde a los **valores de ejemplo** (no se cargaron datos propios)")
     if estimating_delta_turns:
         reasons.append("los **delta turns están estimados** por suposición lineal (Modo B), no medidos")
-    st.warning(
-        "**⚠️ RESULTADO PRELIMINAR** — " + "; y ".join(reasons) + ". "
-        "No usar para decisiones de campo hasta reemplazar por datos reales.",
-        icon="⚠️",
-    )
+    # st.warning(
+    #     "**⚠️ RESULTADO PRELIMINAR** — " + "; y ".join(reasons) + ". "
+    #     "No usar para decisiones de campo hasta reemplazar por datos reales.",
+    #     icon="⚠️",
+    # )
 
 # ── KPI row ───────────────────────────────────────────────────────────────────
 
@@ -519,13 +523,14 @@ with col_plot:
     ax.legend(fontsize=7.5, loc="lower left", framealpha=0.9)
     ax.grid(True, alpha=0.25)
 
-    if uncalibrated:
-        ax.text(
-            0.99, 0.99, "⚠️ RESULTADO PRELIMINAR\nGeometría de ejemplo o\ndelta turns estimados",
-            transform=ax.transAxes, fontsize=7, ha="right", va="top",
-            color="red", alpha=0.5,
-            bbox=dict(boxstyle="round", fc="white", ec="red", alpha=0.5),
-        )
+    # BANNER DESACTIVADO - reponer acá
+    # if uncalibrated:
+    #     ax.text(
+    #         0.99, 0.99, "⚠️ RESULTADO PRELIMINAR\nGeometría de ejemplo o\ndelta turns estimados",
+    #         transform=ax.transAxes, fontsize=7, ha="right", va="top",
+    #         color="red", alpha=0.5,
+    #         bbox=dict(boxstyle="round", fc="white", ec="red", alpha=0.5),
+    #     )
 
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
