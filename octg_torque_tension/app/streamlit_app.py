@@ -476,20 +476,24 @@ with col_plot:
             label="Zona BCCS-limitada (preliminar)",
         )
 
-    ax.plot(tq_x, result.pipe_curve_kips, color="black", lw=2.0, ls="-",
-            label=f"Pipe body ({result.pipe_body_kips:.0f} kips)")
+    # CURVA OCULTA - reponer acá
+    # ax.plot(tq_x, result.pipe_curve_kips, color="black", lw=2.0, ls="-",
+    #         label=f"Pipe body ({result.pipe_body_kips:.0f} kips)")
 
     bccs_label = "BCCS" + (" — ⚠️ ejemplo/estimado" if uncalibrated else "")
-    ax.plot(tq_x, result.bccs_curve_kips, color=_CONN_COLOR, lw=1.5, ls="--", alpha=0.85,
-            label=bccs_label)
+    # CURVA OCULTA - reponer acá
+    # ax.plot(tq_x, result.bccs_curve_kips, color=_CONN_COLOR, lw=1.5, ls="--", alpha=0.85,
+    #         label=bccs_label)
 
     ax.plot(tq_x, result.envelope_kips, color=_CONN_COLOR, lw=2.5, ls="-",
-            label=f"Envelope = min(BCCS, Pipe) [DF={design_factor:.1f} para allowable]")
+            label="Envelope")
     ax.fill_between(tq_x, result.envelope_kips, alpha=0.08, color=_CONN_COLOR)
 
     if result.has_screwjack and result.f_tq_kips is not None:
-        ax.plot(tq_x, result.f_tq_kips, color=_CONN_COLOR, lw=0.9, ls="-.",
-                alpha=0.5, label="F_TQ screw-jack [kips]")
+        pass
+        # CURVA OCULTA - reponer acá
+        # ax.plot(tq_x, result.f_tq_kips, color=_CONN_COLOR, lw=0.9, ls="-.",
+        #         alpha=0.5, label="F_TQ screw-jack [kips]")
 
     if kpi_verdict == "RELIABLE":
         pt_c = "#2ca02c" if op.utilization <= 0.8 else ("#ff7f0e" if op.utilization <= 1.0 else "#d62728")
@@ -513,7 +517,7 @@ with col_plot:
 
     ax.set_xlabel("Applied Torque [kft·lbf]", fontsize=11)
     ax.set_ylabel("Applied Tension [kips]", fontsize=11)
-    ax.set_title(f"Torque–Tension Envelope — {conn_type}, COD {cod:.2f} in", fontsize=11, fontweight="bold")
+    ax.set_title("Torque–Tension Envelope", fontsize=11, fontweight="bold")
     ax.set_xlim(0, tq_max / 1000)
     y_top = max(800.0, result.pipe_body_kips * 1.2, result.bccs_curve_kips.max() * 1.1, hook_load * 1.15)
     ax.set_ylim(0, y_top)
