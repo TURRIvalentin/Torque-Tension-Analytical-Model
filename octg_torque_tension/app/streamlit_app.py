@@ -532,7 +532,7 @@ with col_plot:
                    edgecolors="black", lw=0.8, marker="*",
                    label=f"Operating point ({tq_applied/1000:.1f} kft·lbf, {hook_load} kips)")
         ax.annotate(
-            f"  {hook_load} kips\n  Util: {util_pct:.1f}%",
+            f"  Applied Torque: {tq_applied/1000:.1f} kft·lbf\n  Hook Load: {hook_load} kips",
             xy=(tq_applied / 1000, hook_load), fontsize=7.5, color=pt_c, fontweight="bold",
             va="bottom",
         )
@@ -565,6 +565,17 @@ with col_plot:
 
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
+
+        envelope_csv = "torque_kft_lbf,tension_kips\n" + "\n".join(
+            f"{torque:.6f},{tension:.6f}"
+            for torque, tension in zip(tq_x, result.envelope_kips)
+        )
+        st.download_button(
+            "Download Envelope CSV",
+            data=envelope_csv,
+            file_name="torque_tension_envelope.csv",
+            mime="text/csv",
+        )
 
 # ── Results table ─────────────────────────────────────────────────────────────
 
