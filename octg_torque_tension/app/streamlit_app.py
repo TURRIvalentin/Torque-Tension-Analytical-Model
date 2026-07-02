@@ -118,13 +118,13 @@ _EXAMPLES = {
         cod=6.300, bcr=5.385, st_pin=5.500, l_b=9.375, l_fl=0.200, lf_area=60.0,
         pipe_od=5.500, pipe_wall=0.361,
         delta_mu=0.030, delta_ot=0.150,
-        tq_max=30_600.0, grade="P110",
+        tq_max=100_000.0, grade="P110",
     ),
     "Wedge": dict(
         cod=6.050, bcr=5.399, st_pin=5.500, l_b=9.375, l_fl=0.200, lf_area=60.0,
         pipe_od=5.500, pipe_wall=0.361,
         delta_mu=0.030, delta_ot=0.150,
-        tq_max=39_800.0, grade="P110",
+        tq_max=100_000.0, grade="P110",
     ),
 }
 
