@@ -182,9 +182,9 @@ st.sidebar.title("Torque-Tension Analytical Model")
 
 # 1) Tipo de conexión — controla el screw-jack
 with st.sidebar.container(border=True, key="card_conn_type"):
-    st.markdown('<div class="card-title">1 · Tipo de conexión</div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-title">1 · Connection Type</div>', unsafe_allow_html=True)
     conn_type = st.radio(
-        "Tipo",
+        "Type",
         ["Buttress / Shouldered", "Wedge"],
         key="conn_type",
     )
@@ -193,20 +193,20 @@ with st.sidebar.container(border=True, key="card_conn_type"):
     if not any(k in st.session_state for k in _KEYS):
         _init_defaults(conn_type)
 
-    if st.button("↺ Cargar valores de ejemplo"):
+    if st.button("↺ Load Example Values"):
         _init_defaults(conn_type)
         st.rerun()
 
 # 2) Geometría del pipe body — determina el OD/ID del caño
 with st.sidebar.container(border=True, key="card_pipe_body"):
-    st.markdown('<div class="card-title">2 · Pipe body</div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-title">2 · Pipe Body</div>', unsafe_allow_html=True)
     pipe_spec_mode = st.radio(
-        "Especificar por", ["Wall thickness", "Peso nominal [lb/ft]"],
+        "Specify by", ["Wall thickness", "Nominal weight [lb/ft]"],
         key="pipe_spec_mode", horizontal=True,
     )
     col_a, col_b = st.columns(2)
     pipe_od = col_a.number_input(
-        "OD caño [in]", min_value=0.1, max_value=30.0, step=0.01, format="%.3f",
+        "Pipe OD [in]", min_value=0.1, max_value=30.0, step=0.01, format="%.3f",
         key="pipe_od",
     )
     pipe_id_val = None
@@ -221,9 +221,9 @@ with st.sidebar.container(border=True, key="card_pipe_body"):
             pipe_id_val = pipe_id_from_wall(pipe_od, pipe_wall)
         except ValueError as e:
             pipe_id_error = str(e)
-    else:  # Peso nominal [lb/ft]
+    else:  # Nominal weight [lb/ft]
         pipe_weight = col_b.number_input(
-            "Peso nominal [lb/ft]", min_value=1.0, max_value=200.0, step=0.5,
+            "Nominal weight [lb/ft]", min_value=1.0, max_value=200.0, step=0.5,
             format="%.1f", key="pipe_weight", value=20.0,
         )
         try:
@@ -233,13 +233,13 @@ with st.sidebar.container(border=True, key="card_pipe_body"):
             pipe_id_error = str(e)
 
 if pipe_id_error:
-    st.sidebar.error(f"Geometría de pipe body inválida: {pipe_id_error}")
-    st.error(f"Geometría de pipe body inválida: {pipe_id_error}")
+    st.sidebar.error(f"Invalid pipe body geometry: {pipe_id_error}")
+    st.error(f"Invalid pipe body geometry: {pipe_id_error}")
     st.stop()
 
 # 3) Geometría de la conexión (BCCS / pin)
 with st.sidebar.container(border=True, key="card_conn_geom"):
-    st.markdown('<div class="card-title">3 · Geometría de la conexión</div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-title">3 · Connection Geometry</div>', unsafe_allow_html=True)
     col_a, col_b = st.columns(2)
     cod = col_a.number_input(
         "COD — Coupling OD [in]", min_value=0.1, max_value=30.0,
@@ -277,8 +277,8 @@ with st.sidebar.container(border=True, key="card_conn_geom"):
 try:
     j_btc_geom = polar_moment_annulus(cod, bcr)
 except ValueError as e:
-    st.sidebar.error(f"COD/BCR inválidos: {e}")
-    st.error(f"Geometría inválida — COD/BCR: {e}")
+    st.sidebar.error(f"Invalid COD/BCR: {e}")
+    st.error(f"Invalid geometry — COD/BCR: {e}")
     st.stop()
 
 j_btc = j_btc_geom
@@ -287,7 +287,7 @@ j_btc = j_btc_geom
 with st.sidebar.container(border=True, key="card_material"):
     st.markdown('<div class="card-title">4 · Material</div>', unsafe_allow_html=True)
     grade_choice = st.selectbox(
-        "Grado de acero", list(_GRADES.keys()) + ["Custom"], key="mat_grade",
+        "Steel grade", list(_GRADES.keys()) + ["Custom"], key="mat_grade",
     )
     if grade_choice == "Custom":
         col_a, col_b = st.columns(2)
@@ -314,13 +314,13 @@ delta_mu_val = delta_ot_val = None
 dt_mode = None
 if has_screwjack:
     with st.sidebar.container(border=True, key="card_delta_turns"):
-        st.markdown('<div class="card-title">5 · Delta turns (screw-jack)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">5 · Delta Turns (Screw-Jack)</div>', unsafe_allow_html=True)
         dt_mode = st.radio(
-            "Modo",
-            ["Modo A — Tengo datos torque-turn", "Modo B — Estimar desde torque"],
+            "Mode",
+            ["Mode A — I have torque-turn data", "Mode B — Estimate from torque"],
             key="dt_mode",
         )
-        if dt_mode.startswith("Modo A"):
+        if dt_mode.startswith("Mode A"):
             col_a, col_b = st.columns(2)
             delta_mu_val = sticky_number_input(
                 "ΔMU — Make-up Delta Turns [rev]", "dt_delta_mu", _EXAMPLES[conn_type]["delta_mu"],
@@ -341,23 +341,23 @@ if has_screwjack:
             delta_mu_val = st.session_state.get("_last_dt_delta_mu", _EXAMPLES[conn_type]["delta_mu"])
             delta_ot_val = st.session_state.get("_last_dt_delta_ot", _EXAMPLES[conn_type]["delta_ot"])
             st.caption(
-                f"Usa ΔMU = {delta_mu_val:.3f} rev y ΔOT_rated = {delta_ot_val:.3f} rev "
-                "(constantes asumidas, no medidas) escaladas linealmente con el torque "
-                "aplicado (Torque aplicado / Torque operativo máx.)."
+                f"Uses ΔMU = {delta_mu_val:.3f} rev and ΔOT_rated = {delta_ot_val:.3f} rev "
+                "(assumed constants, not measured) scaled linearly with the applied "
+                "torque (Applied Torque / Maximum operating torque)."
             )
 else:
     with st.sidebar.container(border=True, key="card_delta_turns"):
-        st.markdown('<div class="card-title">5 · Delta turns</div>', unsafe_allow_html=True)
-        st.caption("No aplica — conexión Wedge, F_TQ = 0 por construcción.")
+        st.markdown('<div class="card-title">5 · Delta Turns</div>', unsafe_allow_html=True)
+        st.caption("Not applicable — Wedge connection, F_TQ = 0 by construction.")
 
 # 6) Condiciones operativas
 with st.sidebar.container(border=True, key="card_operating"):
-    st.markdown('<div class="card-title">6 · Condiciones operativas</div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-title">6 · Operating Conditions</div>', unsafe_allow_html=True)
     tq_max = st.number_input(
-        "Torque operativo máximo [ft·lbf]", min_value=100.0, max_value=200_000.0,
+        "Maximum operating torque [ft·lbf]", min_value=100.0, max_value=200_000.0,
         step=100.0, format="%.0f", key="tq_max",
     )
-    tq_applied = st.slider("Torque aplicado [ft·lbf]", 0, int(tq_max), int(tq_max * 0.8), 100)
+    tq_applied = st.slider("Applied Torque [ft·lbf]", 0, int(tq_max), int(tq_max * 0.8), 100)
     hook_load = st.slider("Hook Load [kips]", 0, 1500, 400, 10)
 
 # ── Build Connection ─────────────────────────────────────────────────────────
@@ -381,7 +381,7 @@ try:
         delta_ot=delta_ot_val,
     )
 except ValueError as e:
-    st.error(f"Geometría inválida: {e}")
+    st.error(f"Invalid geometry: {e}")
     st.stop()
 
 sj_overrides: dict = {}
@@ -422,7 +422,7 @@ _cmp_pairs = [
 if has_screwjack:
     _cmp_pairs += [(l_b, _ex["l_b"]), (l_fl, _ex["l_fl"]), (lf_area_val, _ex["lf_area"])]
 using_example_values = all(abs(a - b) < 1e-9 for a, b in _cmp_pairs)
-estimating_delta_turns = has_screwjack and dt_mode is not None and dt_mode.startswith("Modo B")
+estimating_delta_turns = has_screwjack and dt_mode is not None and dt_mode.startswith("Mode B")
 uncalibrated = using_example_values or estimating_delta_turns
 
 # ── Title ─────────────────────────────────────────────────────────────────────
@@ -444,9 +444,9 @@ st.title("Torque-Tension Analytical Model")
 if uncalibrated:
     reasons = []
     if using_example_values:
-        reasons.append("la geometría todavía corresponde a los **valores de ejemplo** (no se cargaron datos propios)")
+        reasons.append("the geometry still matches the **example values** (no user data loaded)")
     if estimating_delta_turns:
-        reasons.append("los **delta turns están estimados** por suposición lineal (Modo B), no medidos")
+        reasons.append("the **delta turns are estimated** by linear assumption (Mode B), not measured")
     # st.warning(
     #     "**⚠️ RESULTADO PRELIMINAR** — " + "; y ".join(reasons) + ". "
     #     "No usar para decisiones de campo hasta reemplazar por datos reales.",
@@ -459,19 +459,19 @@ util_pct = op.utilization * 100
 
 if uncalibrated:
     if op.safe:
-        kpi_status, kpi_verdict = "⚠️ PRELIMINAR-SEGURO", "PRELIMINARY"
+        kpi_status, kpi_verdict = "⚠️ PRELIMINARY-SAFE", "PRELIMINARY"
     else:
-        kpi_status, kpi_verdict = "⚠️ PRELIMINAR-EXCEDIDO", "PRELIMINARY"
+        kpi_status, kpi_verdict = "⚠️ PRELIMINARY-EXCEEDED", "PRELIMINARY"
     governing_label = "BCCS" if bccs_gov else "Pipe body"
-    governing_label += " — ejemplo/estimado"
+    governing_label += " — example/estimated"
 else:
     if op.utilization <= 0.8:
-        kpi_status, kpi_verdict = "✅ SEGURO", "RELIABLE"
+        kpi_status, kpi_verdict = "✅ SAFE", "RELIABLE"
     elif op.utilization <= 1.0:
-        kpi_status, kpi_verdict = "⚠️ PRECAUCIÓN", "RELIABLE"
+        kpi_status, kpi_verdict = "⚠️ CAUTION", "RELIABLE"
     else:
-        kpi_status, kpi_verdict = "🚨 EXCEDIDO", "RELIABLE"
-    governing_label = "BCCS (conexión)" if bccs_gov else "Pipe body"
+        kpi_status, kpi_verdict = "🚨 EXCEEDED", "RELIABLE"
+    governing_label = "BCCS (connection)" if bccs_gov else "Pipe body"
 
 # KPI DESACTIVADO - reponer acá
 # c1, c2, c3, c4 = st.columns(4)
@@ -501,14 +501,14 @@ with col_plot:
             ax.fill_between(
                 tq_x, result.bccs_curve_kips, result.pipe_curve_kips,
                 where=bccs_zone, alpha=0.07, color="red", hatch="////",
-                label="Zona BCCS-limitada (preliminar)",
+                label="BCCS-limited zone (preliminary)",
             )
 
         # CURVA OCULTA - reponer acá
         # ax.plot(tq_x, result.pipe_curve_kips, color="black", lw=2.0, ls="-",
         #         label=f"Pipe body ({result.pipe_body_kips:.0f} kips)")
 
-        bccs_label = "BCCS" + (" — ⚠️ ejemplo/estimado" if uncalibrated else "")
+        bccs_label = "BCCS" + (" — ⚠️ example/estimated" if uncalibrated else "")
         # CURVA OCULTA - reponer acá
         # ax.plot(tq_x, result.bccs_curve_kips, color=_CONN_COLOR, lw=1.5, ls="--", alpha=0.85,
         #         label=bccs_label)
@@ -530,7 +530,7 @@ with col_plot:
 
         ax.scatter([tq_applied / 1000], [hook_load], c=pt_c, s=140, zorder=6,
                    edgecolors="black", lw=0.8, marker="*",
-                   label=f"Punto op. ({tq_applied/1000:.1f} kft·lbf, {hook_load} kips)")
+                   label=f"Operating point ({tq_applied/1000:.1f} kft·lbf, {hook_load} kips)")
         # kpi_status (not kpi_verdict) reflects safety — kpi_verdict only flags whether
         # inputs are calibrated ("RELIABLE"/"PRELIMINARY"), so it must never label the point.
         plain_verdict = kpi_status.split(" ", 1)[1]
@@ -543,7 +543,7 @@ with col_plot:
         if uncalibrated and bccs_zone.any():
             mid_x = tq_x[bccs_zone].mean()
             mid_y = (result.bccs_curve_kips[bccs_zone].mean() + result.pipe_curve_kips[bccs_zone].mean()) / 2
-            ax.text(mid_x, mid_y, "EJEMPLO / ESTIMADO", ha="center", va="center",
+            ax.text(mid_x, mid_y, "EXAMPLE / ESTIMATED", ha="center", va="center",
                     fontsize=7, color="red", alpha=0.4, rotation=10, fontweight="bold")
 
         ax.set_xlabel("Applied Torque [kft·lbf]", fontsize=11)
@@ -573,7 +573,7 @@ with col_plot:
 
 with col_table:
     with st.container(border=True, key="card_table"):
-        st.markdown('<div class="card-title">Valores Calculados</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">Calculated Values</div>', unsafe_allow_html=True)
 
         a_bccs = bccs_area(conn.cod, bcr)
         j_bccs = j_btc
@@ -596,7 +596,7 @@ with col_table:
             ("Pipe curve [kips]", f"{op.pipe_applied_tension_kips:.1f}"),
             ("Envelope [kips]", f"{op.envelope_kips:.1f}"),
             ("Allowable [kips]", f"{op.allowable_kips:.1f}"),
-            ("Utilización", f"{util_pct:.1f}%"),
+            ("Utilization", f"{util_pct:.1f}%"),
             ("", ""),
             ("σ_axial [psi]", f"{sigma_axial:,.0f}"),
             ("τ_outer [psi]", f"{tau_outer:,.0f}"),
@@ -616,38 +616,38 @@ with col_table:
 
 st.divider()
 
-with st.expander("📖 Glosario de acrónimos y símbolos"):
+with st.expander("📖 Glossary of Acronyms and Symbols"):
     st.markdown("""
-    **Glosario de acrónimos y símbolos**
+    **Glossary of Acronyms and Symbols**
 
-    *Conexión / geometría*
-    - **OCTG** — Oil Country Tubular Goods: los tubulares de pozo (casing, tubing). La familia de productos a la que pertenece la conexión.
-    - **BTC** — Buttress Thread and Coupling: la rosca buttress con cople, el estándar API 5B.
-    - **Box** — el componente hembra de la conexión (el cople). **Pin** — el componente macho (el extremo roscado del tubo).
-    - **BCCS** — Box Critical Cross Section: la sección transversal crítica del cople, donde el último filete engranado del pin se encuentra con la rosca del box. Es el punto que falla primero bajo tensión.
-    - **COD** — Coupling Outer Diameter: diámetro exterior del cople.
-    - **BCR** — Box Critical Root diameter: diámetro en la raíz de la rosca del box en la sección crítica.
-    - **ST_pin** — diámetro exterior de la cara de contacto del pin.
-    - **ID** — Inner Diameter: diámetro interno del tubo.
-    - **L_B** — longitud del cople (coupling length).
-    - **L_FL** — thread lead: el avance axial de la rosca por vuelta completa.
-    - **LF_area** — Load Flank area: área activa de los flancos de carga de la rosca.
+    *Connection / geometry*
+    - **OCTG** — Oil Country Tubular Goods: the well tubulars (casing, tubing). The product family this connection belongs to.
+    - **BTC** — Buttress Thread and Coupling: the buttress thread with coupling, the API 5B standard.
+    - **Box** — the female component of the connection (the coupling). **Pin** — the male component (the threaded end of the pipe).
+    - **BCCS** — Box Critical Cross Section: the critical cross-section of the coupling where the last engaged pin thread meets the box thread. First point to fail under tension.
+    - **COD** — Coupling Outer Diameter: outer diameter of the coupling.
+    - **BCR** — Box Critical Root diameter: diameter at the root of the box thread at the critical section.
+    - **ST_pin** — outer diameter of the pin's contact face.
+    - **ID** — Inner Diameter: inner diameter of the pipe.
+    - **L_B** — coupling length.
+    - **L_FL** — thread lead: the axial advance of the thread per full turn.
+    - **LF_area** — Load Flank area: active area of the thread's load flanks.
 
-    *Cargas y desplazamientos*
-    - **Δ_MU** — make-up delta turns: vueltas pasadas el shoulder point durante el enrosque en taller/rig floor (precarga inicial).
-    - **Δ_OT** — operating delta turns: vueltas adicionales que impone el top drive al rotar la sarta ya en el pozo.
-    - **L_OT** — desplazamiento axial total inducido por el torque.
-    - **δ** — desplazamiento elástico efectivo que realmente estira el BCCS.
-    - **ε_R** — relative strain fraction: fracción del desplazamiento que va al BCCS.
-    - **F_TQ** — carga axial (tensión) que el torque induce vía el mecanismo screw-jack.
-    - **T_q** — torque aplicado.
+    *Loads and displacements*
+    - **Δ_MU** — make-up delta turns: turns past the shoulder point during make-up at the shop/rig floor (initial preload).
+    - **Δ_OT** — operating delta turns: additional turns imposed by the top drive when rotating the string downhole.
+    - **L_OT** — total axial displacement induced by torque.
+    - **δ** — effective elastic displacement that actually stretches the BCCS.
+    - **ε_R** — relative strain fraction: fraction of the displacement that goes to the BCCS.
+    - **F_TQ** — axial load (tension) that torque induces via the screw-jack mechanism.
+    - **T_q** — applied torque.
 
-    *Material y resistencia*
-    - **E** — módulo de Young del acero (rigidez elástica).
-    - **fSMYS / Y_m** — Specified Minimum Yield Strength: límite elástico mínimo especificado del acero.
-    - **J** — momento polar de inercia de la sección (resistencia a la torsión).
-    - **Q_T** — torsional yield bajo tensión (de API RP 7G).
-    - **P_BTC** — capacidad tensil del BCCS consumida por el shear torsional.
-    - **P_total** — capacidad total del BCCS consumida por el torque.
-    - **API RP 7G** — la práctica recomendada de API que da la fórmula de torsión bajo tensión.
+    *Material and strength*
+    - **E** — Young's modulus of the steel (elastic stiffness).
+    - **fSMYS / Y_m** — Specified Minimum Yield Strength: the steel's specified minimum yield strength.
+    - **J** — polar moment of inertia of the cross-section (torsional resistance).
+    - **Q_T** — torsional yield under tension (from API RP 7G).
+    - **P_BTC** — tensile capacity of the BCCS consumed by torsional shear.
+    - **P_total** — total capacity of the BCCS consumed by torque.
+    - **API RP 7G** — the API recommended practice that provides the torsion-under-tension formula.
     """)
