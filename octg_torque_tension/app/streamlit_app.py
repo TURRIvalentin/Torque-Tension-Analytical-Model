@@ -124,15 +124,13 @@ conn_type = st.sidebar.radio(
     "Tipo",
     ["Buttress / Shouldered", "Wedge"],
     key="conn_type",
-    help="Buttress/Shouldered → screw-jack activo (F_TQ, Eq. 6). "
-         "Wedge → sin screw-jack (F_TQ = 0, curva plana).",
 )
 has_screwjack = conn_type == "Buttress / Shouldered"
 
 if not any(k in st.session_state for k in _KEYS):
     _init_defaults(conn_type)
 
-if st.sidebar.button("↺ Cargar valores de ejemplo", help="Prellena con datos estimados de la tabla del paper (BTC6.30 / BSP6.05). Opcional — el modo principal es carga manual."):
+if st.sidebar.button("↺ Cargar valores de ejemplo"):
     _init_defaults(conn_type)
     st.rerun()
 
@@ -145,7 +143,7 @@ pipe_od = st.sidebar.number_input(
     key="pipe_od",
 )
 pipe_spec_mode = st.sidebar.radio(
-    "Especificar por", ["Wall thickness", "Peso nominal [lb/ft]", "ID directo"],
+    "Especificar por", ["Wall thickness", "Peso nominal [lb/ft]"],
     key="pipe_spec_mode", horizontal=True,
 )
 pipe_id_val = None
@@ -159,7 +157,7 @@ if pipe_spec_mode == "Wall thickness":
         pipe_id_val = pipe_id_from_wall(pipe_od, pipe_wall)
     except ValueError as e:
         pipe_id_error = str(e)
-elif pipe_spec_mode == "Peso nominal [lb/ft]":
+else:  # Peso nominal [lb/ft]
     pipe_weight = st.sidebar.number_input(
         "Peso nominal [lb/ft]", min_value=1.0, max_value=200.0, step=0.5,
         format="%.1f", key="pipe_weight", value=20.0,
@@ -169,25 +167,11 @@ elif pipe_spec_mode == "Peso nominal [lb/ft]":
         pipe_id_val = pipe_id_from_wall(pipe_od, pipe_wall)
     except ValueError as e:
         pipe_id_error = str(e)
-else:  # ID directo — exact manufacturer value, no wall/weight approximation
-    pipe_id_val = sticky_number_input(
-        "ID caño [in]", "pipe_id_direct", _EXAMPLES[conn_type]["pipe_od"] - 2 * _EXAMPLES[conn_type]["pipe_wall"],
-        min_value=0.01, max_value=29.9, step=0.001, format="%.3f",
-        help="Dato exacto del fabricante — evita la aproximación plain-end de peso/wall.",
-    )
-    if pipe_id_val >= pipe_od:
-        pipe_id_error = f"OD ({pipe_od} in) must exceed ID ({pipe_id_val} in)"
-    pipe_wall = (pipe_od - pipe_id_val) / 2.0
 
 if pipe_id_error:
     st.sidebar.error(f"Geometría de pipe body inválida: {pipe_id_error}")
     st.error(f"Geometría de pipe body inválida: {pipe_id_error}")
     st.stop()
-
-if pipe_spec_mode == "ID directo":
-    st.sidebar.caption(f"ID caño (dato directo) = **{pipe_id_val:.3f} in** — wall implícito = {pipe_wall:.3f} in")
-else:
-    st.sidebar.caption(f"ID caño (calculado) = **{pipe_id_val:.3f} in** — wall = {pipe_wall:.3f} in")
 
 st.sidebar.divider()
 
@@ -196,17 +180,14 @@ st.sidebar.subheader("3. Geometría de la conexión")
 cod = st.sidebar.number_input(
     "COD — Coupling OD [in]", min_value=0.1, max_value=30.0,
     step=0.01, format="%.3f", key="geo_cod",
-    help="Eq. 2 — debe superar el ID del caño (validado al calcular).",
 )
 bcr = st.sidebar.number_input(
     "BCR — Box Critical Root Diameter [in]", min_value=0.1,
     max_value=30.0, step=0.005, format="%.3f", key="geo_bcr",
-    help="Eq. 2 — debe estar entre ID y COD (validado al calcular).",
 )
 st_pin = st.sidebar.number_input(
     "ST_pin — Pin Face OD [in]", min_value=0.1, max_value=30.0,
     step=0.005, format="%.3f", key="geo_st_pin",
-    help="Eq. 3 — debe superar el ID del caño (validado al calcular).",
 )
 
 try:
@@ -219,8 +200,6 @@ except ValueError as e:
 j_mode = st.sidebar.radio(
     "J_BTC — Polar Moment", ["Calculado de COD/BCR", "Manual (valor del fabricante)"],
     key="j_mode", horizontal=True,
-    help="Default = π/32×(COD⁴−BCR⁴). Esa fórmula anular no descuenta el material "
-         "removido por la rosca — sobreescribí con el J real si lo tenés (CDS).",
 )
 if j_mode.startswith("Calculado"):
     j_btc = j_btc_geom
@@ -284,7 +263,6 @@ if has_screwjack:
         "Modo",
         ["Modo A — Tengo datos torque-turn", "Modo B — Estimar desde torque"],
         key="dt_mode",
-        help="Δ_MU y Δ_OT no son derivables del modelo (Eq. 1 los toma como dato experimental).",
     )
     if dt_mode.startswith("Modo A"):
         delta_mu_val = sticky_number_input(
@@ -319,7 +297,6 @@ st.sidebar.subheader("6. Condiciones operativas")
 tq_max = st.sidebar.number_input(
     "Torque operativo máximo [ft·lbf]", min_value=100.0, max_value=200_000.0,
     step=100.0, format="%.0f", key="tq_max",
-    help="Límite CDS de la conexión — define el eje X del envelope.",
 )
 tq_applied = st.sidebar.slider("Torque aplicado [ft·lbf]", 0, int(tq_max), int(tq_max * 0.8), 100)
 hook_load = st.sidebar.slider("Hook Load [kips]", 0, 1500, 400, 10)
