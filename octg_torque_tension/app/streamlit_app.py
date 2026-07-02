@@ -179,7 +179,6 @@ def sticky_number_input(label: str, key: str, fallback: float, container=None, *
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 st.sidebar.title("Torque-Tension Analytical Model")
-st.sidebar.caption("Modelo analítico — ingreso manual de geometría")
 
 # 1) Tipo de conexión — controla el screw-jack
 with st.sidebar.container(border=True, key="card_conn_type"):
@@ -617,55 +616,38 @@ with col_table:
 
 st.divider()
 
-with st.expander("📐 Resumen de Geometría e Inputs"):
-    c1, c2, c3 = st.columns(3)
-    c1.metric("COD", f"{cod:.3f} in")
-    c1.metric("BCR", f"{bcr:.3f} in")
-    c1.metric("ST_pin", f"{st_pin:.3f} in")
-    c2.metric("OD caño", f"{pipe_od:.3f} in")
-    c2.metric("ID caño (calc.)", f"{pipe_id_val:.3f} in")
-    c2.metric("Wall (calc.)", f"{pipe_wall:.3f} in")
-    c3.metric("Torque operativo máx.", f"{tq_max:,.0f} ft·lbf")
-    c3.metric("Screw-jack", "Sí (Buttress)" if has_screwjack else "No (Wedge)")
-    if has_screwjack:
-        st.caption(
-            f"L_B = {l_b:.3f} in | LFL = {l_fl:.3f} in/rev | LF_area = {lf_area_val:.1f} in² | "
-            f"ΔMU = {delta_mu_val:.3f} rev | ΔOT_rated = {delta_ot_val:.3f} rev "
-            f"({'medido' if dt_mode and dt_mode.startswith('Modo A') else 'estimado'})"
-        )
-
-with st.expander("📖 Notas del Modelo y Limitaciones"):
+with st.expander("📖 Glosario de acrónimos y símbolos"):
     st.markdown("""
-    **Modelo analítico — ecuaciones de interacción torque-tensión**
+    **Glosario de acrónimos y símbolos**
 
-    | Ecuación | Descripción |
-    |----------|-------------|
-    | Eq. 1 | L_OT = (ΔMU + ΔOT) × LFL |
-    | Eq. 2 | A_BCCS = π/4 × (COD² − BCR²) |
-    | Eq. 3 | FA_pin = π/4 × (STpin² − ID²) |
-    | Eq. 4 | εR = A_BCCS / (A_BCCS + FA_pin + LFArea) |
-    | Eq. 5 | δ = LOT × εR |
-    | Eq. 6 | F_TQ = δ × E × A_BCCS / L_B |
-    | Eq. 7 | Q_T = 0.096167 × (J/D) × √(Ym²−(P/A)²) [ft·lbf] |
-    | Eq. 8 | P_BTC = A × (fSMYS − √(fSMYS²−(Tq·D/(0.096167·J))²)) |
-    | Eq. 9 | P_total = F_TQ + P_BTC |
+    *Conexión / geometría*
+    - **OCTG** — Oil Country Tubular Goods: los tubulares de pozo (casing, tubing). La familia de productos a la que pertenece la conexión.
+    - **BTC** — Buttress Thread and Coupling: la rosca buttress con cople, el estándar API 5B.
+    - **Box** — el componente hembra de la conexión (el cople). **Pin** — el componente macho (el extremo roscado del tubo).
+    - **BCCS** — Box Critical Cross Section: la sección transversal crítica del cople, donde el último filete engranado del pin se encuentra con la rosca del box. Es el punto que falla primero bajo tensión.
+    - **COD** — Coupling Outer Diameter: diámetro exterior del cople.
+    - **BCR** — Box Critical Root diameter: diámetro en la raíz de la rosca del box en la sección crítica.
+    - **ST_pin** — diámetro exterior de la cara de contacto del pin.
+    - **ID** — Inner Diameter: diámetro interno del tubo.
+    - **L_B** — longitud del cople (coupling length).
+    - **L_FL** — thread lead: el avance axial de la rosca por vuelta completa.
+    - **LF_area** — Load Flank area: área activa de los flancos de carga de la rosca.
 
-    **Interpretación del eje Y:**
-    - Curva Pipe: A_pipe·fSMYS − P_BTC_pipe(Tq)
-    - Curva BCCS: A_BCCS·fSMYS − P_total(Tq)
-    - Envelope: min(BCCS, Pipe)
+    *Cargas y desplazamientos*
+    - **Δ_MU** — make-up delta turns: vueltas pasadas el shoulder point durante el enrosque en taller/rig floor (precarga inicial).
+    - **Δ_OT** — operating delta turns: vueltas adicionales que impone el top drive al rotar la sarta ya en el pozo.
+    - **L_OT** — desplazamiento axial total inducido por el torque.
+    - **δ** — desplazamiento elástico efectivo que realmente estira el BCCS.
+    - **ε_R** — relative strain fraction: fracción del desplazamiento que va al BCCS.
+    - **F_TQ** — carga axial (tensión) que el torque induce vía el mecanismo screw-jack.
+    - **T_q** — torque aplicado.
 
-    **Limitaciones:**
-    - Δ_MU y Δ_OT son datos experimentales (Eq. 1) — no derivables del modelo. En Modo B,
-      Δ_OT se estima asumiendo escala lineal con el torque aplicado (Δ_OT ∝ Tq); esta
-      suposición NO está validada en el paper.
-    - Modelo elástico (Beer, 2015); inválido más allá del límite de fluencia.
-    - El wall/ID del caño derivado del peso nominal usa la aproximación API 5CT
-      W ≈ 10.69·t·(OD−t) (plain-end); puede diferir levemente del peso de catálogo.
-    - Herramienta de exploración analítica — no reemplaza el CDS del fabricante ni
-      validación experimental (torque-turn, Fig. 11 del paper).
+    *Material y resistencia*
+    - **E** — módulo de Young del acero (rigidez elástica).
+    - **fSMYS / Y_m** — Specified Minimum Yield Strength: límite elástico mínimo especificado del acero.
+    - **J** — momento polar de inercia de la sección (resistencia a la torsión).
+    - **Q_T** — torsional yield bajo tensión (de API RP 7G).
+    - **P_BTC** — capacidad tensil del BCCS consumida por el shear torsional.
+    - **P_total** — capacidad total del BCCS consumida por el torque.
+    - **API RP 7G** — la práctica recomendada de API que da la fórmula de torsión bajo tensión.
     """)
-
-st.caption(
-    "Imperial: in, lbf, psi, ft·lbf | Modelo analítico — no certificado para uso en campo"
-)
