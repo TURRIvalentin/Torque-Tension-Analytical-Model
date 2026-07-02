@@ -61,7 +61,6 @@ class EnvelopeResult:
     f_tq_kips: Optional[np.ndarray]   # None if BTC params missing
     p_btc_bccs_kips: np.ndarray
     pipe_body_kips: float
-    design_factor: float
     connection_name: str
     has_screwjack: bool
     screwjack_params_available: bool
@@ -71,7 +70,7 @@ class EnvelopeResult:
 class OperatingPoint:
     """Single operating-point check against the two-curve envelope.
 
-    Criterion: F_hook <= envelope(Tq) / DF
+    Criterion: F_hook <= envelope(Tq) [nominal capacity, no design factor]
     """
 
     torque_ft_lbf: float
@@ -82,7 +81,7 @@ class OperatingPoint:
     bccs_applied_tension_kips: float    # A_BCCS*fSMYS - P_total
     pipe_applied_tension_kips: float    # A_pipe*fSMYS - P_BTC_pipe
     envelope_kips: float                # min(BCCS, Pipe)
-    allowable_kips: float               # envelope / DF
+    allowable_kips: float               # = envelope_kips (nominal capacity)
     utilization: float                  # F_hook / allowable
     safe: bool                          # F_hook <= allowable
 
@@ -93,7 +92,6 @@ def _resolve(conn_val: Optional[float], override: Optional[float]) -> Optional[f
 
 def compute_envelope(
     connection: Connection,
-    design_factor: float = 1.4,
     n_points: int = 200,
     lf_area_in2: Optional[float] = None,
     delta_mu: Optional[float] = None,
@@ -104,11 +102,11 @@ def compute_envelope(
     """Generate torque–tension envelope for one connection (two-curve model).
 
     Sweeps torque from 0 to connection.operating_torque_ft_lbf and computes the
-    BCCS curve, pipe curve, and envelope at each step.
+    BCCS curve, pipe curve, and envelope (nominal capacity, no design factor)
+    at each step.
 
     Args:
         connection:    Connection dataclass with specs. BCR must be set.
-        design_factor: Applied at check time (envelope / DF). Paper cites 1.4 for BTC6.30.
         n_points:      Number of torque steps in the sweep.
         lf_area_in2:   Override for connection.lf_area_in2 [in²].
         delta_mu:      Override for connection.delta_mu [rev].
@@ -123,8 +121,6 @@ def compute_envelope(
     Returns:
         EnvelopeResult with arrays in ft·lbf and kips.
     """
-    if design_factor <= 0:
-        raise ValueError(f"design_factor must be positive, got {design_factor}")
     if n_points < 2:
         raise ValueError(f"n_points must be >= 2, got {n_points}")
 
@@ -204,7 +200,6 @@ def compute_envelope(
         f_tq_kips=f_tq_arr / _KIP if f_tq_arr is not None else None,
         p_btc_bccs_kips=pbtc_bccs_arr / _KIP,
         pipe_body_kips=pipe_capacity / _KIP,
-        design_factor=design_factor,
         connection_name=connection.name,
         has_screwjack=connection.has_screwjack,
         screwjack_params_available=screw_available,
@@ -215,7 +210,6 @@ def check_operating_point(
     connection: Connection,
     tq_ft_lbf: float,
     f_hook_kips: float,
-    design_factor: float = 1.4,
     lf_area_in2: Optional[float] = None,
     delta_mu: Optional[float] = None,
     delta_ot: Optional[float] = None,
@@ -224,14 +218,13 @@ def check_operating_point(
 ) -> OperatingPoint:
     """Evaluate a single (Tq, F_hook) point against the two-curve envelope.
 
-    Criterion: F_hook <= envelope(Tq) / DF
+    Criterion: F_hook <= envelope(Tq) [nominal capacity, no design factor]
     where envelope(Tq) = min(Applied_Tension_BCCS, Applied_Tension_Pipe).
 
     Args:
         connection:   Connection to check. BCR must be set.
         tq_ft_lbf:   Applied torque [ft·lbf].
         f_hook_kips: Applied hook load [kips].
-        design_factor: Safety factor (default 1.4).
         lf_area_in2, delta_mu, delta_ot: Override values for BTC screw-jack params.
         pipe_od: Pipe body outer diameter [in]. Defaults to 5.5 in (this study).
         j_bccs: Override for the BCCS polar moment of inertia [in⁴]. Defaults to
@@ -286,7 +279,7 @@ def check_operating_point(
     bccs_val = max(0.0, a_bccs * smys - ptotal_val)
     pipe_val = max(0.0, a_pipe * smys - pbtc_pipe_val)
     env_val = min(bccs_val, pipe_val)
-    allowable = env_val / design_factor
+    allowable = env_val  # nominal capacity, no design factor
     hook_lbf = f_hook_kips * _KIP
     utilization = hook_lbf / allowable if allowable > 0 else float("inf")
 

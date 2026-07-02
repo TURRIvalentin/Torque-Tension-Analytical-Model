@@ -36,7 +36,6 @@ SCREWJACK_PARAMS = dict(
     delta_mu=0.20,        # rev — estimated; TODO from Fig. 11a (typically 0.1–0.5 rev)
     delta_ot=0.10,        # rev — estimated at rated torque; TODO from Fig. 11b
 )
-DESIGN_FACTOR = 1.4  # paper value, Fig. 12
 
 
 def _plot_envelope(ax: plt.Axes, conn, result, color: str, linestyle: str = "-") -> None:
@@ -54,7 +53,7 @@ def _plot_envelope(ax: plt.Axes, conn, result, color: str, linestyle: str = "-")
     # Envelope = min(BCCS, Pipe)
     if result.screwjack_params_available or not result.has_screwjack:
         ax.plot(tq, result.envelope_kips, color=color, lw=2, ls=linestyle,
-                label=f"{conn.name} — Envelope / DF={DESIGN_FACTOR}")
+                label=f"{conn.name} — Envelope")
         ax.fill_between(tq, result.envelope_kips, alpha=0.12, color=color)
 
 
@@ -77,12 +76,12 @@ def plot_fig12_btc(output_dir: str) -> None:
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
     fig.suptitle(
         "SPE-232499-MS Fig.12 — Torque–Tension Envelope: BTC Shouldered Connections\n"
-        "5.5-in 20# P110 | Design Factor 1.4",
+        "5.5-in 20# P110",
         fontsize=12,
     )
 
-    r630 = compute_envelope(BTC6_30, design_factor=DESIGN_FACTOR, **SCREWJACK_PARAMS)
-    r605 = compute_envelope(BTC6_05, design_factor=DESIGN_FACTOR, **SCREWJACK_PARAMS)
+    r630 = compute_envelope(BTC6_30, **SCREWJACK_PARAMS)
+    r605 = compute_envelope(BTC6_05, **SCREWJACK_PARAMS)
 
     _plot_envelope(ax1, BTC6_30, r630, color="#1f77b4")
     _style_ax(ax1, "BTC6.30 (Standard Clearance, COD=6.30 in)")
@@ -110,12 +109,12 @@ def plot_fig13_wedge(output_dir: str) -> None:
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
     fig.suptitle(
         "SPE-232499-MS Fig.13 — Torque–Tension Envelope: Wedge Connections\n"
-        "5.5-in 20# P110 | Design Factor 1.4 | F_TQ = 0 (no screw-jack)",
+        "5.5-in 20# P110 | F_TQ = 0 (no screw-jack)",
         fontsize=12,
     )
 
-    rbsp = compute_envelope(BSP6_05, design_factor=DESIGN_FACTOR)
-    rbsl = compute_envelope(BSL5_90, design_factor=DESIGN_FACTOR)
+    rbsp = compute_envelope(BSP6_05)
+    rbsl = compute_envelope(BSL5_90)
 
     _plot_envelope(ax1, BSP6_05, rbsp, color="#2ca02c")
     _style_ax(ax1, "BSP6.05 — Bushmaster® SP (Wedge, COD=6.05 in)")
@@ -147,7 +146,7 @@ def plot_all_connections(output_dir: str) -> None:
     ax.axhline(641, color="gray", lw=1.2, ls=":", label="Pipe body 641 kips")
 
     for conn, color, ls, extra in configs:
-        r = compute_envelope(conn, design_factor=DESIGN_FACTOR, n_points=300, **extra)
+        r = compute_envelope(conn, n_points=300, **extra)
         tq = r.torques_ft_lbf / 1_000
         label_base = conn.name.split(" ")[0]
         ax.plot(tq, r.envelope_kips, color=color, lw=2, ls=ls,
@@ -157,7 +156,7 @@ def plot_all_connections(output_dir: str) -> None:
     ax.set_ylabel("Max Allowable Hook Load [kips]", fontsize=12)
     ax.set_title(
         "SPE-232499-MS — All Four Connections: Torque–Tension Envelopes\n"
-        "5.5-in 20# P110 | Design Factor 1.4",
+        "5.5-in 20# P110",
         fontsize=12, fontweight="bold",
     )
     ax.set_ylim(0, 900)

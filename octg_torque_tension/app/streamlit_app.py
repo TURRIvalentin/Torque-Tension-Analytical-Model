@@ -61,20 +61,20 @@ _EXAMPLES = {
         cod=6.300, bcr=5.385, st_pin=5.500, l_b=9.375, l_fl=0.200, lf_area=60.0,
         pipe_od=5.500, pipe_wall=0.361,
         delta_mu=0.030, delta_ot=0.150,
-        tq_max=30_600.0, design_factor=1.4, grade="P110",
+        tq_max=30_600.0, grade="P110",
     ),
     "Wedge": dict(
         cod=6.050, bcr=5.399, st_pin=5.500, l_b=9.375, l_fl=0.200, lf_area=60.0,
         pipe_od=5.500, pipe_wall=0.361,
         delta_mu=0.030, delta_ot=0.150,
-        tq_max=39_800.0, design_factor=1.4, grade="P110",
+        tq_max=39_800.0, grade="P110",
     ),
 }
 
 _KEYS = [
     "geo_cod", "geo_bcr", "geo_st_pin", "geo_l_b", "geo_l_fl", "geo_lf_area",
     "pipe_od", "pipe_wall", "dt_delta_mu", "dt_delta_ot",
-    "tq_max", "design_factor", "mat_grade",
+    "tq_max", "mat_grade",
 ]
 
 
@@ -91,7 +91,6 @@ def _init_defaults(conn_type: str) -> None:
     st.session_state["dt_delta_mu"] = ex["delta_mu"]
     st.session_state["dt_delta_ot"] = ex["delta_ot"]
     st.session_state["tq_max"] = ex["tq_max"]
-    st.session_state["design_factor"] = ex["design_factor"]
     st.session_state["mat_grade"] = ex["grade"]
     st.session_state["j_mode"] = "Calculado de COD/BCR"
     st.session_state["pipe_spec_mode"] = "Wall thickness"
@@ -276,21 +275,11 @@ else:
 
 st.sidebar.divider()
 
-# 5) Design factor
-st.sidebar.subheader("5. Design factor")
-design_factor = st.sidebar.number_input(
-    "Design Factor", min_value=1.0, max_value=3.0, step=0.05, format="%.2f",
-    key="design_factor",
-    help="Paper cita DF=1.4 para BTC6.30 (Liu 2021). No confirmado para otras conexiones.",
-)
-
-st.sidebar.divider()
-
-# 6) Delta turns — solo aplica a Buttress (screw-jack)
+# 5) Delta turns — solo aplica a Buttress (screw-jack)
 delta_mu_val = delta_ot_val = None
 dt_mode = None
 if has_screwjack:
-    st.sidebar.subheader("6. Delta turns (screw-jack)")
+    st.sidebar.subheader("5. Delta turns (screw-jack)")
     dt_mode = st.sidebar.radio(
         "Modo",
         ["Modo A — Tengo datos torque-turn", "Modo B — Estimar desde torque"],
@@ -320,13 +309,13 @@ if has_screwjack:
             "aplicado (Torque aplicado / Torque operativo máx.)."
         )
 else:
-    st.sidebar.subheader("6. Delta turns")
+    st.sidebar.subheader("5. Delta turns")
     st.sidebar.caption("No aplica — conexión Wedge, F_TQ = 0 por construcción.")
 
 st.sidebar.divider()
 
-# 7) Condiciones operativas
-st.sidebar.subheader("7. Condiciones operativas")
+# 6) Condiciones operativas
+st.sidebar.subheader("6. Condiciones operativas")
 tq_max = st.sidebar.number_input(
     "Torque operativo máximo [ft·lbf]", min_value=100.0, max_value=200_000.0,
     step=100.0, format="%.0f", key="tq_max",
@@ -366,7 +355,7 @@ if has_screwjack:
 # ── Compute ───────────────────────────────────────────────────────────────────
 
 try:
-    result = compute_envelope(conn, design_factor=design_factor, n_points=300,
+    result = compute_envelope(conn, n_points=300,
                                pipe_od=pipe_od, j_bccs=j_btc, **sj_overrides)
 except ValueError as e:
     st.error(f"Envelope error: {e}")
@@ -374,7 +363,7 @@ except ValueError as e:
 
 try:
     op = check_operating_point(conn, float(tq_applied), float(hook_load),
-                                design_factor=design_factor, pipe_od=pipe_od,
+                                pipe_od=pipe_od,
                                 j_bccs=j_btc, **sj_overrides)
 except ValueError as e:
     st.error(f"Operating point error: {e}")
@@ -452,7 +441,7 @@ else:
 # c1, c2, c3, c4 = st.columns(4)
 # c1.metric("Estado", kpi_status)
 # c2.metric("Utilización", f"{util_pct:.1f}%", delta=f"{util_pct-100:.1f}% vs límite")
-# c3.metric("Allowable [kips]", f"{op.allowable_kips:.1f}", help="Envelope / DF")
+# c3.metric("Allowable [kips]", f"{op.allowable_kips:.1f}", help="Capacidad nominal del envelope")
 # c4.metric("Componente limitante", governing_label)
 
 st.divider()
@@ -503,8 +492,11 @@ with col_plot:
     ax.scatter([tq_applied / 1000], [hook_load], c=pt_c, s=140, zorder=6,
                edgecolors="black", lw=0.8, marker="*",
                label=f"Punto op. ({tq_applied/1000:.1f} kft·lbf, {hook_load} kips)")
+    # kpi_status (not kpi_verdict) reflects safety — kpi_verdict only flags whether
+    # inputs are calibrated ("RELIABLE"/"PRELIMINARY"), so it must never label the point.
+    plain_verdict = kpi_status.split(" ", 1)[1]
     ax.annotate(
-        f"  {hook_load} kips\n  Util: {util_pct:.1f}%\n  [{kpi_verdict}]",
+        f"  {hook_load} kips\n  Util: {util_pct:.1f}%\n  [{plain_verdict}]",
         xy=(tq_applied / 1000, hook_load), fontsize=7.5, color=pt_c, fontweight="bold",
         va="bottom",
     )
