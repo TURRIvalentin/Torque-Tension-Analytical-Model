@@ -92,7 +92,6 @@ def _init_defaults(conn_type: str) -> None:
     st.session_state["dt_delta_ot"] = ex["delta_ot"]
     st.session_state["tq_max"] = ex["tq_max"]
     st.session_state["mat_grade"] = ex["grade"]
-    st.session_state["j_mode"] = "Calculado de COD/BCR"
     st.session_state["pipe_spec_mode"] = "Wall thickness"
 
 
@@ -197,19 +196,7 @@ except ValueError as e:
     st.error(f"Geometría inválida — COD/BCR: {e}")
     st.stop()
 
-j_mode = st.sidebar.radio(
-    "J_BTC — Polar Moment", ["Calculado de COD/BCR", "Manual (valor del fabricante)"],
-    key="j_mode", horizontal=True,
-)
-if j_mode.startswith("Calculado"):
-    j_btc = j_btc_geom
-    st.sidebar.caption(f"J_BTC = π/32×(COD⁴−BCR⁴) = **{j_btc:.2f} in⁴**")
-else:
-    j_btc = sticky_number_input(
-        "J_BTC — Polar Moment [in⁴]", "geo_j_btc_manual", j_btc_geom,
-        min_value=0.01, max_value=10_000.0, step=0.1, format="%.2f",
-    )
-    st.sidebar.caption(f"Valor geométrico de referencia = {j_btc_geom:.2f} in⁴")
+j_btc = j_btc_geom
 
 if has_screwjack:
     st.sidebar.markdown("**Screw-jack (Buttress)**")
