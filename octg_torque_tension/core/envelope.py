@@ -7,6 +7,13 @@ Each torque value produces two limits (Fig. 12–13 interpretation, HIPOTESIS DE
     Envelope(Tq)             = min(BCCS, Pipe)                          [actual limit]
 
 where P_total = F_TQ (Eq. 6) + P_BTC (Eq. 8), and P_BTC_pipe uses pipe body geometry.
+This is nominal capacity — no design factor or other safety margin is applied anywhere
+in this module. allowable(Tq) == envelope(Tq), identically.
+
+_envelope_at_torque() is the ONLY place this formula is evaluated. Both compute_envelope
+(the torque sweep used to plot the curve) and check_operating_point (the single-point
+check used for utilization/verdict) call it — so the plotted curve and the allowable
+used to judge a point can never diverge into two different numbers.
 
 ⚠️  ASSUMPTION: for the torque sweep, delta_ot scales linearly with Tq
     (delta_ot(Tq) = delta_ot_rated * Tq / Tq_op). This is NOT stated in the paper;
@@ -47,7 +54,8 @@ class EnvelopeResult:
                           (F_TQ contribution absent — result is optimistic for BTC).
         pipe_curve_kips : Applied_Tension_Pipe = A_pipe*fSMYS − P_BTC_pipe [kips]
                           Always computed; nearly flat (small torsional penalty on pipe body).
-        envelope_kips   : min(bccs_curve, pipe_curve) at each torque point [kips].
+        envelope_kips   : min(bccs_curve, pipe_curve) at each torque point [kips] —
+                          nominal capacity, no design factor.
         f_tq_kips       : screw-jack preload array [kips]; zeros for wedge,
                           None if BTC screw-jack params are unavailable.
         p_btc_bccs_kips : P_BTC for BCCS cross-section [kips] — torsional consumed capacity.
@@ -80,14 +88,60 @@ class OperatingPoint:
     p_total_kips: float                 # Eq. 9 = F_TQ + P_BTC
     bccs_applied_tension_kips: float    # A_BCCS*fSMYS - P_total
     pipe_applied_tension_kips: float    # A_pipe*fSMYS - P_BTC_pipe
-    envelope_kips: float                # min(BCCS, Pipe)
-    allowable_kips: float               # = envelope_kips (nominal capacity)
+    envelope_kips: float                # min(BCCS, Pipe) — same value as the plotted curve
+    allowable_kips: float               # = envelope_kips, identically (no design factor)
     utilization: float                  # F_hook / allowable
     safe: bool                          # F_hook <= allowable
 
 
 def _resolve(conn_val: Optional[float], override: Optional[float]) -> Optional[float]:
     return override if override is not None else conn_val
+
+
+def _envelope_at_torque(
+    connection: Connection,
+    tq_ft_lbf: float,
+    tq_max_ft_lbf: float,
+    a_bccs: float,
+    j_bccs: float,
+    a_pipe: float,
+    j_pipe: float,
+    pipe_od_val: float,
+    smys: float,
+    lf_area_in2: Optional[float],
+    delta_mu: Optional[float],
+    delta_ot_rated: Optional[float],
+) -> tuple[float, float, float, float, float]:
+    """Canonical single-torque evaluation of the two-curve envelope. All values in lbf.
+
+    Returns (f_tq_val, p_btc_bccs_val, p_total_val, bccs_val, pipe_val, envelope_val).
+
+    This is the single source of truth for the envelope formula (Eq. 6, 8, 9 combined).
+    Do not reimplement it elsewhere — both the torque sweep (compute_envelope) and the
+    single-point check (check_operating_point) call this function so that the plotted
+    curve and the allowable used for utilization/verdict are always the same number.
+    """
+    pbtc_bccs_val = p_btc(tq_ft_lbf, connection.cod, j_bccs, smys, a_bccs)
+    pbtc_pipe_val = p_btc(tq_ft_lbf, pipe_od_val, j_pipe, smys, a_pipe)
+
+    f_tq_val = 0.0
+    if connection.has_screwjack:
+        st, lb, lfl = connection.st_pin, connection.l_b, connection.l_fl
+        if all(v is not None for v in [lf_area_in2, delta_mu, delta_ot_rated, st, lb, lfl]):
+            fa = fa_pin(st, connection.id_)
+            eps = epsilon_r(a_bccs, fa, lf_area_in2)
+            # ⚠️ ASSUMPTION: delta_ot scales linearly with torque
+            fraction = tq_ft_lbf / tq_max_ft_lbf if tq_max_ft_lbf > 0 else 0.0
+            dot_at = delta_ot_rated * fraction
+            lot = l_ot(delta_mu, dot_at, lfl)
+            d = delta_displacement(lot, eps)
+            f_tq_val = f_tq(d, connection.grade.E, a_bccs, lb)
+
+    ptotal_val = p_total(f_tq_val, pbtc_bccs_val)  # Eq. 9
+    bccs_val = max(0.0, a_bccs * smys - ptotal_val)
+    pipe_val = max(0.0, a_pipe * smys - pbtc_pipe_val)
+    envelope_val = min(bccs_val, pipe_val)  # nominal capacity, no design factor
+    return f_tq_val, pbtc_bccs_val, ptotal_val, bccs_val, pipe_val, envelope_val
 
 
 def compute_envelope(
@@ -101,9 +155,8 @@ def compute_envelope(
 ) -> EnvelopeResult:
     """Generate torque–tension envelope for one connection (two-curve model).
 
-    Sweeps torque from 0 to connection.operating_torque_ft_lbf and computes the
-    BCCS curve, pipe curve, and envelope (nominal capacity, no design factor)
-    at each step.
+    Sweeps torque from 0 to connection.operating_torque_ft_lbf, calling
+    _envelope_at_torque at each step — the same function used by check_operating_point.
 
     Args:
         connection:    Connection dataclass with specs. BCR must be set.
@@ -129,76 +182,52 @@ def compute_envelope(
     # ---- BCCS geometry ----
     bcr = connection.require("bcr", connection.bcr)
     a_bccs = bccs_area(connection.cod, bcr)
-    j_bccs = j_bccs if j_bccs is not None else polar_moment_annulus(connection.cod, bcr)
+    j_bccs_val = j_bccs if j_bccs is not None else polar_moment_annulus(connection.cod, bcr)
     smys = connection.grade.smys
-    bccs_capacity = a_bccs * smys  # lbf — upper bound at Tq=0, P=0
 
     # ---- Pipe body geometry ----
     a_pipe = math.pi / 4.0 * (pipe_od_val**2 - connection.id_**2)
     j_pipe = math.pi / 32.0 * (pipe_od_val**4 - connection.id_**4)
-    pipe_capacity = a_pipe * smys  # lbf
+    pipe_capacity = a_pipe * smys  # lbf — Tq=0 reference
 
     # ---- Torque sweep ----
     tq_max = connection.operating_torque_ft_lbf
     torques = np.linspace(0.0, tq_max, n_points)
 
-    # ---- P_BTC for BCCS and pipe body (always computable) ----
-    pbtc_bccs_arr = np.array([p_btc(tq, connection.cod, j_bccs, smys, a_bccs) for tq in torques])
-    pbtc_pipe_arr = np.array([p_btc(tq, pipe_od_val, j_pipe, smys, a_pipe) for tq in torques])
-
-    # ---- F_TQ sweep (screw-jack) ----
-    screw_available = False
-    f_tq_arr: Optional[np.ndarray] = None
+    lf = _resolve(connection.lf_area_in2, lf_area_in2)
+    dmu = _resolve(connection.delta_mu, delta_mu)
+    dot_rated = _resolve(connection.delta_ot, delta_ot)
 
     if not connection.has_screwjack:
-        # Wedge: F_TQ = 0 by construction regardless of params
-        screw_available = True
-        f_tq_arr = np.zeros(n_points)
-
+        screw_available = True  # Wedge: F_TQ = 0 by construction regardless of params
     else:
-        lf = _resolve(connection.lf_area_in2, lf_area_in2)
-        dmu = _resolve(connection.delta_mu, delta_mu)
-        dot_rated = _resolve(connection.delta_ot, delta_ot)
-        st = connection.st_pin
-        lb = connection.l_b
-        lfl = connection.l_fl
-
         missing = [n for n, v in [
             ("lf_area_in2", lf), ("delta_mu", dmu), ("delta_ot", dot_rated),
-            ("st_pin", st), ("l_b", lb), ("l_fl", lfl),
+            ("st_pin", connection.st_pin), ("l_b", connection.l_b), ("l_fl", connection.l_fl),
         ] if v is None]
+        screw_available = not missing
 
-        if not missing:
-            fa = fa_pin(st, connection.id_)
-            eps = epsilon_r(a_bccs, fa, lf)  # constant over sweep (geometry fixed)
-            f_tq_list = []
-            for tq in torques:
-                # ⚠️ ASSUMPTION: delta_ot scales linearly with torque
-                fraction = tq / tq_max if tq_max > 0 else 0.0
-                dot_at = dot_rated * fraction
-                lot = l_ot(dmu, dot_at, lfl)
-                d = delta_displacement(lot, eps)
-                f_tq_list.append(f_tq(d, connection.grade.E, a_bccs, lb))
-            f_tq_arr = np.array(f_tq_list)
-            screw_available = True
+    f_tq_list, pbtc_bccs_list, bccs_list, pipe_list, env_list = [], [], [], [], []
+    for tq in torques:
+        f_tq_val, pbtc_bccs_val, _ptotal_val, bccs_val, pipe_val, env_val = _envelope_at_torque(
+            connection, tq, tq_max, a_bccs, j_bccs_val, a_pipe, j_pipe, pipe_od_val, smys,
+            lf, dmu, dot_rated,
+        )
+        f_tq_list.append(f_tq_val)
+        pbtc_bccs_list.append(pbtc_bccs_val)
+        bccs_list.append(bccs_val)
+        pipe_list.append(pipe_val)
+        env_list.append(env_val)
 
-    # ---- Two curves ----
-    # BCCS curve: A_BCCS*fSMYS - F_TQ - P_BTC_BCCS
-    # When F_TQ unavailable (BTC, params missing): use 0.0 — optimistic, flagged by screwjack_params_available
-    f_tq_for_bccs = f_tq_arr if f_tq_arr is not None else np.zeros(n_points)
-    ptotal_arr = f_tq_for_bccs + pbtc_bccs_arr  # lbf — Eq. 9
-
-    bccs_arr = np.maximum(0.0, bccs_capacity - ptotal_arr)   # lbf, clamped at 0
-    pipe_arr = np.maximum(0.0, pipe_capacity - pbtc_pipe_arr)  # lbf, clamped at 0
-    env_arr = np.minimum(bccs_arr, pipe_arr)                   # lbf
+    f_tq_arr = np.array(f_tq_list) if screw_available else None
 
     return EnvelopeResult(
         torques_ft_lbf=torques,
-        bccs_curve_kips=bccs_arr / _KIP,
-        pipe_curve_kips=pipe_arr / _KIP,
-        envelope_kips=env_arr / _KIP,
+        bccs_curve_kips=np.array(bccs_list) / _KIP,
+        pipe_curve_kips=np.array(pipe_list) / _KIP,
+        envelope_kips=np.array(env_list) / _KIP,
         f_tq_kips=f_tq_arr / _KIP if f_tq_arr is not None else None,
-        p_btc_bccs_kips=pbtc_bccs_arr / _KIP,
+        p_btc_bccs_kips=np.array(pbtc_bccs_list) / _KIP,
         pipe_body_kips=pipe_capacity / _KIP,
         connection_name=connection.name,
         has_screwjack=connection.has_screwjack,
@@ -219,7 +248,8 @@ def check_operating_point(
     """Evaluate a single (Tq, F_hook) point against the two-curve envelope.
 
     Criterion: F_hook <= envelope(Tq) [nominal capacity, no design factor]
-    where envelope(Tq) = min(Applied_Tension_BCCS, Applied_Tension_Pipe).
+    where envelope(Tq) = min(Applied_Tension_BCCS, Applied_Tension_Pipe), computed by
+    the same _envelope_at_torque() call used by compute_envelope's sweep.
 
     Args:
         connection:   Connection to check. BCR must be set.
@@ -242,44 +272,23 @@ def check_operating_point(
 
     bcr = connection.require("bcr", connection.bcr)
     a_bccs = bccs_area(connection.cod, bcr)
-    j_bccs = j_bccs if j_bccs is not None else polar_moment_annulus(connection.cod, bcr)
+    j_bccs_val = j_bccs if j_bccs is not None else polar_moment_annulus(connection.cod, bcr)
     smys = connection.grade.smys
 
-    # Pipe body
     a_pipe = math.pi / 4.0 * (pipe_od_val**2 - connection.id_**2)
     j_pipe = math.pi / 32.0 * (pipe_od_val**4 - connection.id_**4)
 
-    # P_BTC for BCCS and pipe (Eq. 8)
-    pbtc_bccs_val = p_btc(tq_ft_lbf, connection.cod, j_bccs, smys, a_bccs)
-    pbtc_pipe_val = p_btc(tq_ft_lbf, pipe_od_val, j_pipe, smys, a_pipe)
+    lf = _resolve(connection.lf_area_in2, lf_area_in2)
+    dmu = _resolve(connection.delta_mu, delta_mu)
+    dot_rated = _resolve(connection.delta_ot, delta_ot)
+    tq_max = connection.operating_torque_ft_lbf
 
-    # F_TQ (Eq. 6)
-    f_tq_val = 0.0
-    if connection.has_screwjack:
-        lf = _resolve(connection.lf_area_in2, lf_area_in2)
-        dmu = _resolve(connection.delta_mu, delta_mu)
-        dot_rated = _resolve(connection.delta_ot, delta_ot)
-        st = connection.st_pin
-        lb = connection.l_b
-        lfl = connection.l_fl
-        if all(v is not None for v in [lf, dmu, dot_rated, st, lb, lfl]):
-            fa = fa_pin(st, connection.id_)
-            eps = epsilon_r(a_bccs, fa, lf)
-            tq_max = connection.operating_torque_ft_lbf
-            fraction = tq_ft_lbf / tq_max if tq_max > 0 else 0.0
-            dot_at = dot_rated * fraction
-            lot = l_ot(dmu, dot_at, lfl)
-            d = delta_displacement(lot, eps)
-            f_tq_val = f_tq(d, connection.grade.E, a_bccs, lb)
+    f_tq_val, pbtc_bccs_val, ptotal_val, bccs_val, pipe_val, env_val = _envelope_at_torque(
+        connection, tq_ft_lbf, tq_max, a_bccs, j_bccs_val, a_pipe, j_pipe, pipe_od_val, smys,
+        lf, dmu, dot_rated,
+    )
 
-    # Eq. 9
-    ptotal_val = p_total(f_tq_val, pbtc_bccs_val)
-
-    # Two curves and envelope
-    bccs_val = max(0.0, a_bccs * smys - ptotal_val)
-    pipe_val = max(0.0, a_pipe * smys - pbtc_pipe_val)
-    env_val = min(bccs_val, pipe_val)
-    allowable = env_val  # nominal capacity, no design factor
+    allowable = env_val  # nominal capacity, identical to the plotted envelope — no design factor
     hook_lbf = f_hook_kips * _KIP
     utilization = hook_lbf / allowable if allowable > 0 else float("inf")
 

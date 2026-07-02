@@ -302,6 +302,17 @@ class TestCheckOperatingPoint:
         with pytest.raises(ValueError):
             check_operating_point(BSP6_05, 0.0, -1.0)
 
+    def test_allowable_matches_plotted_curve_at_same_torque(self):
+        """The plotted curve (compute_envelope) and the allowable used for
+        utilization/verdict (check_operating_point) must be the exact same number
+        at a shared torque — both derive from the single canonical
+        _envelope_at_torque(), not from two independently-implemented formulas."""
+        r = compute_envelope(BTC6_30, n_points=300, **_SJ)
+        idx = 240
+        tq_grid = float(r.torques_ft_lbf[idx])
+        pt = check_operating_point(BTC6_30, tq_grid, 300.0, **_SJ)
+        assert abs(r.envelope_kips[idx] - pt.allowable_kips) < 1e-9
+
     def test_utilization_consistent_with_envelope_position(self):
         """Util > 100% must coincide with hook load exceeding the envelope (bug regression:
         utilization, safe, and plotted position must all derive from the same allowable)."""
