@@ -531,11 +531,8 @@ with col_plot:
         ax.scatter([tq_applied / 1000], [hook_load], c=pt_c, s=140, zorder=6,
                    edgecolors="black", lw=0.8, marker="*",
                    label=f"Operating point ({tq_applied/1000:.1f} kft·lbf, {hook_load} kips)")
-        # kpi_status (not kpi_verdict) reflects safety — kpi_verdict only flags whether
-        # inputs are calibrated ("RELIABLE"/"PRELIMINARY"), so it must never label the point.
-        plain_verdict = kpi_status.split(" ", 1)[1]
         ax.annotate(
-            f"  {hook_load} kips\n  Util: {util_pct:.1f}%\n  [{plain_verdict}]",
+            f"  {hook_load} kips\n  Util: {util_pct:.1f}%",
             xy=(tq_applied / 1000, hook_load), fontsize=7.5, color=pt_c, fontweight="bold",
             va="bottom",
         )
