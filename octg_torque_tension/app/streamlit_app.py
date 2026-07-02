@@ -403,10 +403,6 @@ uncalibrated = using_example_values or estimating_delta_turns
 # ── Title ─────────────────────────────────────────────────────────────────────
 
 st.title("Torque-Tension Analytical Model")
-st.markdown(
-    f"**{conn_type}** &nbsp;|&nbsp; {grade.name} &nbsp;|&nbsp; "
-    f"COD {cod:.2f} in &nbsp;|&nbsp; DF = {design_factor:.2f}"
-)
 
 # BANNER DESACTIVADO - reponer acá
 # Always-on general disclaimer (calm tone)
@@ -452,11 +448,12 @@ else:
         kpi_status, kpi_verdict = "🚨 EXCEDIDO", "RELIABLE"
     governing_label = "BCCS (conexión)" if bccs_gov else "Pipe body"
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Estado", kpi_status)
-c2.metric("Utilización", f"{util_pct:.1f}%", delta=f"{util_pct-100:.1f}% vs límite")
-c3.metric("Allowable [kips]", f"{op.allowable_kips:.1f}", help="Envelope / DF")
-c4.metric("Componente limitante", governing_label)
+# KPI DESACTIVADO - reponer acá
+# c1, c2, c3, c4 = st.columns(4)
+# c1.metric("Estado", kpi_status)
+# c2.metric("Utilización", f"{util_pct:.1f}%", delta=f"{util_pct-100:.1f}% vs límite")
+# c3.metric("Allowable [kips]", f"{op.allowable_kips:.1f}", help="Envelope / DF")
+# c4.metric("Componente limitante", governing_label)
 
 st.divider()
 
